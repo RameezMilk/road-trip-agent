@@ -1,0 +1,228 @@
+/* Frutiger Aero: blue sky, aqua glass, lush greens, soft bubbles — readable contrast, big touch targets. */
+:root {
+  color-scheme: light;
+  --ink: #0b3a5b;
+  --muted: #3f6a86;
+  --glass: rgba(255, 255, 255, 0.64);
+  --glass-edge: rgba(255, 255, 255, 0.92);
+  --aqua: #16a5d8;
+  --aqua-deep: #0d86b6;
+  --leaf: #3fae49;
+  --leaf-deep: #2b8a34;
+  --sky-top: #eafbff;
+  --sky-mid: #9fdcf7;
+  --sky-low: #4fb3e8;
+
+  --marker-restaurant: #f28c28;
+  --marker-rest: #2bb5a8;
+  --marker-hotel: #3d6fd8;
+  --marker-scenic: #3fae49;
+  --marker-attraction: #e8b51a;
+  --marker-charging: #19c3e6;
+
+  font-family: "Segoe UI", "Frutiger", "Myriad Pro", "Helvetica Neue", system-ui, sans-serif;
+  line-height: 1.45;
+  color: var(--ink);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background:
+    radial-gradient(120% 55% at 50% 0%, var(--sky-top) 0%, var(--sky-mid) 48%, var(--sky-low) 100%) fixed,
+    var(--sky-mid);
+}
+
+.app {
+  position: relative;
+  max-width: 560px;
+  margin: 0 auto;
+  padding: 16px 16px calc(24px + env(safe-area-inset-bottom));
+}
+
+.bubbles {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: -1;
+  background:
+    radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0) 60%) 12% 78% / 46px 46px
+    no-repeat,
+    radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.8), rgba(255, 255, 255, 0) 60%) 86% 64% / 28px 28px
+    no-repeat,
+    radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0) 60%) 70% 90% / 64px 64px
+    no-repeat;
+  animation: drift 14s ease-in-out infinite alternate;
+}
+
+@keyframes drift {
+  to {
+    transform: translateY(-18px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bubbles {
+    animation: none;
+  }
+}
+
+.glass {
+  background: var(--glass);
+  border: 1px solid var(--glass-edge);
+  border-radius: 22px;
+  box-shadow:
+    0 10px 28px rgba(11, 58, 91, 0.16),
+    inset 0 1px 0 #fff;
+  backdrop-filter: blur(12px) saturate(1.2);
+  -webkit-backdrop-filter: blur(12px) saturate(1.2);
+}
+
+.header {
+  padding: 16px;
+  margin-bottom: 14px;
+}
+
+.panel {
+  padding: 16px;
+  margin-bottom: 14px;
+}
+
+h1,
+h2,
+h3 {
+  margin: 0 0 6px;
+}
+
+h1 {
+  font-size: 22px;
+}
+
+h2 {
+  font-size: 19px;
+}
+
+h3 {
+  font-size: 16px;
+}
+
+p {
+  margin: 6px 0;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.notice {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.55);
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.tabs {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0 18px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.95);
+  color: var(--ink);
+  font-weight: 600;
+  text-decoration: none;
+  background: linear-gradient(180deg, #ffffff 0%, #e3f5fd 55%, #cbeaf8 100%);
+  box-shadow:
+    inset 0 1px 0 #fff,
+    0 2px 6px rgba(13, 134, 182, 0.18);
+}
+
+.pill-active {
+  color: #fff;
+  background: linear-gradient(180deg, #5fd0f5 0%, var(--aqua) 55%, var(--aqua-deep) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.8),
+    0 3px 8px rgba(13, 134, 182, 0.35);
+}
+
+.pill-green {
+  color: #fff;
+  background: linear-gradient(180deg, #8fe07f 0%, var(--leaf) 55%, var(--leaf-deep) 100%);
+}
+
+.pill:focus-visible {
+  outline: 3px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.choice-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.map-placeholder {
+  display: grid;
+  place-items: center;
+  height: 240px;
+  margin-top: 8px;
+  border-radius: 16px;
+  text-align: center;
+  padding: 16px;
+  color: var(--muted);
+  background:
+    linear-gradient(160deg, rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0.25)),
+    linear-gradient(180deg, #bfe9fb 0%, #a6e3a1 100%);
+  border: 1px solid var(--glass-edge);
+}
+
+.legend {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 8px;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  font-weight: 600;
+}
+
+.orb {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  font-size: 17px;
+  box-shadow:
+    inset 0 6px 8px rgba(255, 255, 255, 0.55),
+    0 2px 6px rgba(11, 58, 91, 0.25);
+}
+
+/* Start/finish are square-ish so they read differently from optional stops even without color. */
+.orb-endpoint {
+  border-radius: 10px;
+  background: #fff;
+  border-color: var(--ink);
+}
