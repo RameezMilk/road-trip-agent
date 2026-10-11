@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isNoWish, parseBudgetDiet, parseRoute, tidyPlace } from "./answers";
+import { isNoWish, parseBudgetDiet, parseRoute, parseTripType, placeName, tidyPlace } from "./answers";
 
 describe("tidyPlace", () => {
   it("title-cases and formats a trailing state code", () => {
@@ -86,5 +86,36 @@ describe("isNoWish", () => {
     for (const text of ["nope", "No", "nah!", "that's it", "all good 👍", "Nope, that's it"])
       expect(isNoWish(text)).toBe(true);
     for (const text of ["beach day", "no fast food", "seafood"]) expect(isNoWish(text)).toBe(false);
+  });
+});
+
+describe("parseTripType", () => {
+  it("reads a trip type said on its own", () => {
+    expect(parseTripType("One way")).toBe("one_way");
+    expect(parseTripType("just one-way!")).toBe("one_way");
+    expect(parseTripType("round trip")).toBe("round_trip");
+    expect(parseTripType("Wilmington one way")).toBeNull();
+  });
+});
+
+describe("placeName", () => {
+  it("accepts a bare place and tidies it", () => {
+    expect(placeName("Myrtle Beach")).toBe("Myrtle Beach");
+    expect(placeName("asheville nc")).toBe("Asheville, NC");
+    expect(placeName("Wilmington ")).toBe("Wilmington");
+  });
+
+  it("rejects trip types, vibes, small talk and sentences", () => {
+    for (const text of [
+      "One way",
+      "round trip",
+      "the beach",
+      "mountains",
+      "idk",
+      "yes",
+      "somewhere warm",
+      "I want Boone",
+    ])
+      expect(placeName(text)).toBeNull();
   });
 });

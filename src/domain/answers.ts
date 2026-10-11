@@ -36,6 +36,29 @@ export function tidyPlace(raw: string): string {
 
 const ONE_WAY = /\b(?:one[\s-]?way|1[\s-]?way|not coming back|no return)\b/i;
 const ROUND_TRIP = /\b(?:round[\s-]?trip|rt|there and back|and back|return(?:ing)?(?: home)?|both ways)\b/i;
+// Words that make a reply a sentence or small talk rather than a place name.
+const SENTENCE =
+  /\b(?:i|we|my|me|us|want|wanna|go|going|like|love|please|pls|would|could|let'?s|maybe|think|yes|yeah|no|nope|ok|okay|sure|idk|dunno|somewhere|anywhere|wherever|hi|hey|hello|thanks)\b/i;
+
+/** "one way" / "round trip" on its own (no places), or null. */
+export function parseTripType(input: string): TripType | null {
+  const text = input
+    .trim()
+    .replace(/[.!]+$/, "")
+    .replace(/^(?:it'?s|just|a)\s+/i, "");
+  if (/^(?:one[\s-]?way|1[\s-]?way)$/i.test(text)) return "one_way";
+  if (/^(?:round[\s-]?trip|there and back|both ways)$/i.test(text)) return "round_trip";
+  return null;
+}
+
+/** A reply that is just a place ("Myrtle Beach", "asheville nc"), tidied; null for anything else. */
+export function placeName(input: string): string | null {
+  const text = input.trim().replace(/[.!]+$/, "");
+  if (!/^[\p{L}][\p{L} .,'-]{1,58}$/u.test(text) || text.split(/\s+/).length > 5) return null;
+  if (SENTENCE.test(text) || ONE_WAY.test(text) || ROUND_TRIP.test(text)) return null;
+  if (/^(?:the\s+)?(?:beach|mountains?|lake|coast|city|countryside)$/i.test(text)) return null; // a vibe, not a place
+  return tidyPlace(text);
+}
 
 /**
  * "Chapel Hill to Wilmington", "chapel hill → wilmington nc, one way", "Asheville from Durham".
@@ -63,7 +86,6 @@ export function parseRoute(
   const clean = (s: string) => s.replace(/^[\s,;-]+|[\s,;-]+$/g, "");
   const [a, b] = [clean(start), clean(end)];
   // Place names, not sentences ("I want to go to Boone" → Gemini).
-  const SENTENCE = /\b(?:i|we|my|me|us|want|wanna|go|going|like|love|please|pls|would|could|let'?s|maybe|think)\b/i;
   const plausible = (s: string) =>
     s.length >= 2 && s.length <= 60 && s.split(/\s+/).length <= 5 && /[a-z]/i.test(s) && !SENTENCE.test(s);
   if (!plausible(a) || !plausible(b)) return null;

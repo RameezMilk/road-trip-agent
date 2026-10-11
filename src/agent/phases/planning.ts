@@ -1,4 +1,4 @@
-import { isNoWish, parseBudgetDiet, parseRoute, tidyPlace } from "../../domain/answers";
+import { isNoWish, parseBudgetDiet, parseRoute, parseTripType, placeName } from "../../domain/answers";
 import { parseDateRange } from "../../domain/dates";
 import { datesLabel, isComplete, missingFields, tripTypeLabel } from "../../domain/reconcile";
 import {
@@ -32,6 +32,10 @@ export function nextQuestion(reqs: PredefinedRequirements): string | null {
   const missing = missingFields(reqs);
   const group = STEPS.find((s) => s.fields.some((f) => missing.includes(f)));
   if (!group) return null;
+  // One end of the route known: ask for the other end only ("🏁 And where to?").
+  if (group.step === "route" && !reqs.startLocation !== !reqs.endLocation) {
+    return copy.question(reqs.startLocation ? "endLocation" : "startLocation");
+  }
   const open = group.fields.filter((f) => missing.includes(f));
   return open.length === group.fields.length || (group.step === "route" && open.length === 2)
     ? copy.stepQuestion(group.step)
@@ -139,12 +143,12 @@ export function parseDeterministic(
       const route = parseRoute(text);
       if (route) return route.tripType ? route : { startLocation: route.startLocation, endLocation: route.endLocation };
       if (asked === "tripType") return parseFieldDeterministic("tripType", text);
-      // Follow-up for the one missing end of the route: a short place name is the answer.
-      const other = asked === "startLocation" ? reqs.endLocation : asked === "endLocation" ? reqs.startLocation : null;
-      if (other && /^[\p{L}][\p{L} .,'-]{1,58}$/u.test(text.trim()) && text.trim().split(/\s+/).length <= 5) {
-        return { [asked as "startLocation" | "endLocation"]: tidyPlace(text) };
-      }
-      return null;
+      const tripType = parseTripType(text); // "one way" on its own is never a place
+      if (tripType) return { tripType };
+      // A lone place answers "Where to?" (the destination), or whichever end the follow-up asked for.
+      const place = placeName(text);
+      if (!place) return null;
+      return reqs.endLocation ? (reqs.startLocation ? null : { startLocation: place }) : { endLocation: place };
     }
     case "dates": {
       const range = parseDateRange(text, today);
@@ -168,7 +172,9 @@ function acknowledge(r: PredefinedRequirements, changed: PredefinedField[]): str
   const has = (...fields: PredefinedField[]) => fields.some((f) => changed.includes(f));
   if (has("startLocation", "endLocation", "tripType") && r.startLocation && r.endLocation) {
     bits.push(`${r.startLocation} → ${r.endLocation}${r.tripType ? ` (${tripTypeLabel(r.tripType)})` : ""}`);
-  } else if (has("startLocation", "endLocation")) bits.push(r.startLocation ?? r.endLocation ?? "");
+  } else if (has("startLocation", "endLocation")) {
+    bits.push(r.startLocation ? `From ${r.startLocation}` : `To ${r.endLocation ?? ""}`);
+  } else if (has("tripType") && r.tripType) bits.push(tripTypeLabel(r.tripType));
   if (has("startDate", "endDate") && r.startDate && r.endDate) {
     bits.push(datesLabel({ startDate: r.startDate, endDate: r.endDate }));
   }
