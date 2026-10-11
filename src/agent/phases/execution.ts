@@ -1,22 +1,80 @@
+import { access } from "node:fs/promises";
+import { resolve } from "node:path";
 import { diffItineraries, formatDiff } from "../../domain/diff";
 import { currentStopIndex, finalizeItinerary, shiftSchedule } from "../../domain/schedule";
 import { formatTime } from "../../domain/time";
 import { type Itinerary, type LiveUpdate, liveUpdateSchema, type Trip } from "../../schemas";
 import { PlanningError } from "../../services/planner";
 import { conversationBlock, itineraryBlock, SYSTEM } from "../../services/prompts";
-import { copy } from "../copy";
+import { copy, VIBES, type Vibe } from "../copy";
 import type { Ctx, Engine } from "../engine";
 
-/** review → execution: everyone approved, so everyone gets the live dashboard card. */
+/**
+ * The first itinerary is in and the trip starts: each member gets "✅ Itinerary ready!", the dashboard
+ * card, a send-off that fits the destination, and the dap GIF. Members are served in parallel (so both
+ * phones light up together), in that order within each thread.
+ */
+export async function launch(e: Engine, trip: Trip, itinerary: Itinerary): Promise<void> {
+  const vibe = destinationVibe(e, trip, itinerary);
+  const gif = await gifPath(e);
+  await Promise.all(
+    (await e.joinedMembers(trip.id)).map(async (m) => {
+      const to = e.recipient(m);
+      await e.sendTo(to, copy.itineraryReady());
+      if (e.dashboardUrl(trip)) await e.upsertCard(trip, m, itinerary, true);
+      else await e.sendTo(to, copy.dashboardUnavailable());
+      await e.sendTo(to, copy.sendOff(await vibe, itinerary.endLocation));
+      if (gif) await e.sendFile(to, gif, "image/gif");
+    }),
+  );
+}
+
+/** review → execution (REVIEW_STEP on): everyone approved the version they already have on their card. */
 export async function begin(e: Engine, tripId: string): Promise<void> {
   if (!(await e.repo.transition(tripId, "review", "execution"))) return;
   const trip = await e.repo.getTrip(tripId);
-  if (!trip) return;
-  const itinerary = await e.currentItinerary(trip);
-  for (const m of await e.joinedMembers(tripId)) {
-    await e.sendTo(e.recipient(m), copy.approvedAll());
-    if (!e.dashboardUrl(trip)) await e.sendTo(e.recipient(m), copy.dashboardUnavailable());
-    await e.upsertCard(trip, m, itinerary, true);
+  const itinerary = trip ? await e.currentItinerary(trip) : null;
+  if (!trip || !itinerary) return;
+  const vibe = destinationVibe(e, trip, itinerary);
+  const gif = await gifPath(e);
+  await Promise.all(
+    (await e.joinedMembers(tripId)).map(async (m) => {
+      const to = e.recipient(m);
+      await e.sendTo(to, copy.approvedAll());
+      if (!m.card) await e.upsertCard(trip, m, itinerary);
+      await e.sendTo(to, copy.sendOff(await vibe, itinerary.endLocation));
+      if (gif) await e.sendFile(to, gif, "image/gif");
+    }),
+  );
+}
+
+/** Beach, mountains, city…: one fast OpenAI Decisions call (no Decider → the generic line). */
+async function destinationVibe(e: Engine, trip: Trip, itinerary: Itinerary): Promise<Vibe> {
+  const decided = await e.decider.choose({
+    name: "destination_vibe",
+    instructions: "What kind of place is this road trip headed to? Pick what best describes the destination.",
+    evidence: [
+      `Destination: ${itinerary.endLocation}`,
+      `Stops: ${itinerary.stops.map((s) => s.name).join(", ")}`,
+      trip.resolved?.adopted.length ? `Wishes: ${trip.resolved.adopted.map((a) => a.text).join("; ")}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n"),
+    choices: VIBES.map((v) => ({ value: v, description: v === "other" ? "None of these" : `A ${v} destination` })),
+  });
+  return decided && decided.confidence >= 0.4 ? (decided.value as Vibe) : "other";
+}
+
+async function gifPath(e: Engine): Promise<string | null> {
+  const configured = e.config.dapGifPath;
+  if (!configured) return null;
+  const path = resolve(configured);
+  try {
+    await access(path);
+    return path;
+  } catch {
+    e.log("send_off_gif_missing", { path });
+    return null;
   }
 }
 

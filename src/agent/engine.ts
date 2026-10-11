@@ -194,6 +194,16 @@ export class Engine {
     await Promise.race([this.chat.typing(to).catch(() => undefined), timeout]);
   }
 
+  /** Sends a file (the send-off GIF); failures are logged, never thrown. */
+  async sendFile(to: Recipient, path: string, mimeType: string): Promise<void> {
+    if (!this.chat.sendAttachment) return;
+    try {
+      await this.chat.sendAttachment(to, path, mimeType);
+    } catch (error) {
+      this.log("send_file_failed", { to: to.memberId, error: String(error) });
+    }
+  }
+
   async reply(ctx: Ctx, text: string): Promise<void> {
     await this.sendTo(this.recipient(ctx.member), text);
   }

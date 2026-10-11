@@ -1,8 +1,7 @@
-import { METERS_PER_MILE } from "../domain/geo";
 import type { PredefinedReconciliation } from "../domain/reconcile";
 import { datesLabel, routeLabel } from "../domain/reconcile";
-import { formatDuration, formatLocalDate, formatTime } from "../domain/time";
-import type { Itinerary, Poll, PredefinedField, StopKind, Trip } from "../schemas";
+import { formatLocalDate } from "../domain/time";
+import type { Poll, PredefinedField, StopKind, Trip } from "../schemas";
 
 // Every message the agent sends lives here, so tone and wording stay consistent.
 
@@ -45,6 +44,20 @@ export const STEP_QUESTIONS: Record<PlanningStep, string> = {
   route: "📍 Where to? e.g. Chapel Hill to Wilmington\n(say “one way” if you're not driving back)",
   dates: "📅 When? e.g. Oct 18–19",
   budgetDiet: "💵 Budget per person + any dietary needs?\ne.g. $300, halal — or $250, none",
+};
+
+/** What kind of place the trip heads to; picks the send-off joke. */
+export const VIBES = ["beach", "mountains", "lake", "city", "desert", "countryside", "other"] as const;
+export type Vibe = (typeof VIBES)[number];
+
+const SEND_OFF: Record<Vibe, { emoji: string; line: string }> = {
+  beach: { emoji: "🏖️", line: "Enjoy the waves — and don't forget to pack sunscreen 🧴😎" },
+  mountains: { emoji: "🏔️", line: "Enjoy the views — and pack a jacket, it gets chilly up there 🧥😄" },
+  lake: { emoji: "🛶", line: "Enjoy the water — and don't forget a towel 🏊‍♂️" },
+  city: { emoji: "🌆", line: "Enjoy the city — and wear comfy shoes, you'll be walking a lot 👟" },
+  desert: { emoji: "🌵", line: "Enjoy the sun — and bring water. Lots of water 💧😅" },
+  countryside: { emoji: "🌾", line: "Enjoy the open road — and queue up a good playlist 🎶" },
+  other: { emoji: "🚗", line: "Enjoy the ride — and queue up a good playlist 🎶" },
 };
 
 const masked = (handle: string) =>
@@ -150,6 +163,9 @@ export const copy = {
       ? `⚠️ Couldn't apply that change (${reason}). The current plan stands.`
       : `⚠️ Hit a snag planning (${reason}). Text me anything to retry.`,
   itineraryReady: () => "✅ Itinerary ready!",
+  /** "Wilmington, NC" → "🏖️ You're set for Wilmington!" plus a line that fits the place. */
+  sendOff: (vibe: Vibe, destination: string) =>
+    `${SEND_OFF[vibe].emoji} You're set for ${destination.split(",")[0]?.trim() || destination}!\n${SEND_OFF[vibe].line}`,
   reviewAsk: () => "Reply `approve` 👍 or tell me what to change.",
   revisedHeader: (version: number, note: string | null, diff: string) =>
     [`✏️ Plan updated (v${version})${note ? ` — ${note}` : ""}`, diff].join("\n"),
@@ -175,34 +191,3 @@ export const copy = {
     `This trip ended${trip.abortReason ? ` (${trip.abortReason})` : ""}. Text \`newtrip\` to start a new one.`,
   textOnly: () => "I can only read text for now — mind typing that out?",
 };
-
-export function formatItinerary(it: Itinerary): string {
-  const miles = Math.round(it.totals.distanceMeters / METERS_PER_MILE);
-  const lines: string[] = [
-    `🗺️ ${it.title} (v${it.version})`,
-    `${it.startLocation} → ${it.endLocation} · ${miles} mi · ${formatDuration(it.totals.driveSeconds)} driving${it.routeSource === "osrm" ? "" : " (estimated)"}`,
-  ];
-  let day = 0;
-  for (const s of it.stops) {
-    if (s.day !== day) {
-      day = s.day;
-      const date = (s.departAt ?? s.arriveAt ?? "").slice(0, 10);
-      lines.push("", `📅 Day ${day}${date ? ` · ${formatLocalDate(date)}` : ""}`);
-    }
-    const at = s.arriveAt ?? s.departAt;
-    const time = at ? formatTime(at, it.timeZone) : "";
-    const dwell = s.dwellMinutes && s.departAt && s.arriveAt && s.kind !== "lodging" ? ` · ${s.dwellMinutes} min` : "";
-    lines.push(
-      `${time} ${STOP_ICONS[s.kind]} ${s.name}${dwell}${s.geocodeSource === "approximate" ? " (approx. location)" : ""}`,
-    );
-  }
-  const t = it.totals;
-  const su = it.sustainability;
-  lines.push(
-    "",
-    `💵 ~$${t.estimatedCostPerPersonUsd}/person (fuel $${t.fuelCostPerPersonUsd} + web-estimated stops $${t.webEstimateStopCostPerPersonUsd}) · budget $${t.budgetPerPersonUsd}${t.overBudget ? " ⚠️ over budget" : ""}`,
-    `🌱 Carpooling saves ${su.gallonsSavedByCarpool} gal ($${su.usdSavedByCarpool}) vs. everyone driving alone · ${su.greenStops}/${su.totalStops} green stops`,
-  );
-  if (it.droppedStops.length) lines.push(`⚠️ Couldn't locate: ${it.droppedStops.join(", ")}`);
-  return lines.join("\n");
-}

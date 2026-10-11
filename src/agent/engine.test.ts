@@ -1,3 +1,6 @@
+import { writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join as join_ } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createMemoryDb } from "../db/memory";
 import { Repo } from "../db/repo";
@@ -60,13 +63,9 @@ async function say(handle: string, text: string): Promise<void> {
   await engine.settled();
 }
 
-beforeEach(async () => {
-  chat = new FakeChat();
-  chat.blocked.add(BLOCKED);
-  llm = new FakeLlm();
-  decider = new FakeDecider();
-  repo = new Repo(await createMemoryDb());
-  now = new Date("2026-10-10T14:00:00Z");
+const GIF = join_(tmpdir(), "road-trip-agent-test-dap.gif");
+
+function makeEngine(overrides: Partial<ConstructorParameters<typeof Engine>[0]["config"]> = {}): Engine {
   const planner = new Planner({
     llm,
     geocoder: new FakeGeocoder(),
@@ -74,7 +73,7 @@ beforeEach(async () => {
     vehicleMpg: 30,
     gasPriceUsdPerGallon: 3.2,
   });
-  engine = new Engine({
+  return new Engine({
     repo,
     chat,
     llm,
@@ -86,9 +85,22 @@ beforeEach(async () => {
       timeZone: "America/New_York",
       vehicleMpg: 30,
       gasPriceUsdPerGallon: 3.2,
+      dapGifPath: GIF,
+      ...overrides,
     },
     clock: () => now,
   });
+}
+
+beforeEach(async () => {
+  await writeFile(GIF, "GIF89a");
+  chat = new FakeChat();
+  chat.blocked.add(BLOCKED);
+  llm = new FakeLlm();
+  decider = new FakeDecider();
+  repo = new Repo(await createMemoryDb());
+  now = new Date("2026-10-10T14:00:00Z");
+  engine = makeEngine();
 });
 
 async function tripOf(handle: string) {
@@ -208,6 +220,7 @@ describe("Engine end to end", () => {
       datesPoll?.id as string,
       (await repo.findActiveMembership(SAM))?.member.id as string,
     );
+    decider.onChoose("destination_vibe", { value: "beach", confidence: 0.8 });
     const abstain = datesPoll?.options.find((o) => o.value.kind === "abstain");
     const result = await engine.submitWidgetVote(samToken, { optionId: abstain?.id as string });
     expect(result).toMatchObject({ ok: true });
@@ -216,22 +229,64 @@ describe("Engine end to end", () => {
     expect(drafts()).toBe(4);
     expect(llm.calls.some((c) => c.task === "conflict_analysis")).toBe(false);
 
-    // Drafting ran in the background and landed in review.
-    const reviewTrip = await tripOf(ALEX);
-    expect(reviewTrip.phase).toBe("review");
-    expect(reviewTrip.resolved).toMatchObject({
+    // No review step: the trip goes straight to the road. Each phone gets, in order: ready, the card,
+    // a send-off that fits the destination (OpenAI Decisions: mountains) and the dap GIF.
+    const live = await tripOf(ALEX);
+    expect(live.phase).toBe("execution");
+    expect(live.resolved).toMatchObject({
       endLocation: "Asheville, NC",
       startDate: "2026-10-17",
       budgetPerPersonUsd: 150,
       dietaryRestrictions: ["halal"],
       adopted: [{ category: "activities", text: "a waterfall hike" }],
     });
-    const v1 = await repo.getItinerary(reviewTrip.id, 1);
+    for (const who of [ALEX, SAM]) {
+      expect(chat.timeline(who).slice(-4)).toEqual([
+        "✅ Itinerary ready!",
+        "[card]",
+        "🏖️ You're set for Asheville!\nEnjoy the waves — and don't forget to pack sunscreen 🧴😎",
+        "[file road-trip-agent-test-dap.gif]",
+      ]);
+    }
+    expect(chat.textsTo(ALEX).some((t) => t.includes("Looking Glass Falls"))).toBe(false); // no itinerary text
+    const v1 = await repo.getItinerary(live.id, 1);
     expect(v1?.stops[0]?.kind).toBe("origin");
     expect(v1?.stops.at(-1)?.name).toBe("Home: Chapel Hill, NC");
     expect(v1?.stops[1]?.departAt).toMatch(/^2026-10-17T/);
 
-    // Minor feedback → v2, approvals carry over.
+    // On the road: running late at lunch shifts the rest of the day and edits the cards.
+    const lunch = v1?.stops.find((s) => s.name === "Halal Grill");
+    now = new Date(Date.parse(lunch?.arriveAt as string) + 30 * 60_000);
+    llm.on("live_update", { kind: "delay", delayMinutes: 30, stopId: lunch?.id, request: null, reply: null });
+    await say(SAM, "we took longer at lunch, push everything back 30 min");
+    const v2 = await repo.getItinerary(live.id, 2);
+    const lunchV2 = v2?.stops.find((s) => s.name === "Halal Grill");
+    expect(Date.parse(lunchV2?.departAt as string) - Date.parse(lunch?.departAt as string)).toBe(30 * 60_000);
+    expect(chat.lastTextTo(ALEX)).toContain("running 30 min behind at Halal Grill");
+    expect(chat.timeline(ALEX).at(-1)).toBe("[card edit]");
+  });
+
+  it("with REVIEW_STEP, everyone approves first; feedback revises the card", async () => {
+    engine = makeEngine({ reviewStep: true });
+    await join();
+    canonicalizePlaces();
+    for (const who of [ALEX, SAM]) {
+      await say(who, "Chapel Hill to Asheville");
+      await say(who, "oct 17-18");
+      await say(who, "$200, halal");
+    }
+    llm.on("itinerary_draft", DRAFT);
+    await say(ALEX, "nope");
+    await say(SAM, "nope"); // everyone agrees → no poll → drafting → review
+    const trip = await tripOf(ALEX);
+    expect(trip.phase).toBe("review");
+    expect(chat.timeline(SAM).slice(-3)).toEqual([
+      "✅ Itinerary ready!",
+      "[card]",
+      "Reply `approve` 👍 or tell me what to change.",
+    ]);
+
+    // Minor feedback → v2, approvals carry over; the diff is texted and the card edited in place.
     await say(ALEX, "approve");
     llm.on("feedback_assessment", {
       impact: "minor",
@@ -242,28 +297,19 @@ describe("Engine end to end", () => {
     });
     await say(SAM, "can we spend a bit more time at the falls?");
     const v2trip = await tripOf(ALEX);
-    expect(v2trip.phase).toBe("review");
     expect(v2trip.currentVersion).toBe(2);
     expect(await repo.listApprovals(v2trip.id, 2)).toHaveLength(1);
-    expect(chat.lastTextTo(ALEX)).toContain("Plan updated (v2)");
+    expect(chat.textsTo(ALEX).some((t) => t.startsWith("✏️ Plan updated (v2)"))).toBe(true);
+    expect(chat.timeline(ALEX).at(-1)).toBe("[card edit]");
 
-    // Sam approves → everyone has → execution with dashboard cards.
+    // Sam approves → execution: send-off (no Decider answer → generic line) and the GIF.
     await say(SAM, "approve");
     expect((await tripOf(ALEX)).phase).toBe("execution");
-    const cards = chat.sent.filter((m) => m.card?.url.endsWith(`/trip/${v2trip.publicId}`) && !m.card.edited);
-    expect(cards.map((c) => c.to).sort()).toEqual([ALEX, SAM]);
-
-    // On the road: running late at lunch shifts the rest of the day and edits the cards.
-    const v2 = await repo.getItinerary(v2trip.id, 2);
-    const lunch = v2?.stops.find((s) => s.name === "Halal Grill");
-    now = new Date(Date.parse(lunch?.arriveAt as string) + 30 * 60_000);
-    llm.on("live_update", { kind: "delay", delayMinutes: 30, stopId: lunch?.id, request: null, reply: null });
-    await say(SAM, "we took longer at lunch, push everything back 30 min");
-    const v3 = await repo.getItinerary(v2trip.id, 3);
-    const lunchV3 = v3?.stops.find((s) => s.name === "Halal Grill");
-    expect(Date.parse(lunchV3?.departAt as string) - Date.parse(lunch?.departAt as string)).toBe(30 * 60_000);
-    expect(chat.lastTextTo(ALEX)).toContain("running 30 min behind at Halal Grill");
-    expect(chat.sent.some((m) => m.card?.edited)).toBe(true);
+    expect(chat.timeline(SAM).slice(-3)).toEqual([
+      "🎉 Everyone approved!",
+      "🚗 You're set for Asheville!\nEnjoy the ride — and queue up a good playlist 🎶",
+      "[file road-trip-agent-test-dap.gif]",
+    ]);
   });
 
   it("aborts when a must-have is still tied after the revote", async () => {

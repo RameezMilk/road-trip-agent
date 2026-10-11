@@ -2,9 +2,9 @@ import { diffItineraries, formatDiff } from "../../domain/diff";
 import { option, withAbstain } from "../../domain/reconcile";
 import { FeedbackAssessment, type Itinerary, type Poll, type PollOption, type TripPhase } from "../../schemas";
 import { conversationBlock, itineraryBlock, requirementsBlock, SYSTEM } from "../../services/prompts";
-import { copy, formatItinerary } from "../copy";
+import { copy } from "../copy";
 import type { Ctx, Engine } from "../engine";
-import { begin as beginExecution } from "./execution";
+import { begin as beginExecution, launch } from "./execution";
 import { castFromText, sendPoll } from "./voting";
 
 /** A requested change to the current itinerary. */
@@ -72,9 +72,30 @@ export async function commitDraft(
       await e.repo.approve(tripId, itinerary.version, memberId);
     }
   }
+  const current = { ...trip, currentVersion: itinerary.version };
+
+  // Without the review step the first itinerary goes straight to the road.
+  if (!previous && !e.config.reviewStep) {
+    if (await e.repo.transition(tripId, "drafting", "execution")) await launch(e, current, itinerary);
+    return;
+  }
   if (!(await e.repo.transition(tripId, "drafting", "review"))) return;
-  const header = previous && diff ? `${copy.revisedHeader(itinerary.version, revision?.note ?? null, diff)}\n\n` : "";
-  await e.broadcast(tripId, `${header}${formatItinerary(itinerary)}\n\n${copy.reviewAsk()}`);
+  // The itinerary is never sent as text: the card shows it, and revisions get a short diff.
+  if (previous && diff) {
+    await e.broadcast(
+      tripId,
+      `${copy.revisedHeader(itinerary.version, revision?.note ?? null, diff)}\n${copy.reviewAsk()}`,
+    );
+    await e.refreshCards(current, itinerary);
+  } else {
+    await Promise.all(
+      (await e.joinedMembers(tripId)).map(async (m) => {
+        await e.sendTo(e.recipient(m), copy.itineraryReady());
+        await e.upsertCard(current, m, itinerary, true);
+        await e.sendTo(e.recipient(m), copy.reviewAsk());
+      }),
+    );
+  }
   await checkAllApproved(e, tripId);
 }
 
