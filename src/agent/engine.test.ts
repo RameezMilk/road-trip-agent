@@ -4,7 +4,7 @@ import { Repo } from "../db/repo";
 import type { ItineraryDraft } from "../schemas";
 import type { LlmRequest } from "../services/llm";
 import { Planner } from "../services/planner";
-import { FakeChat, FakeGeocoder, FakeLlm, FakeRouter } from "../testing/fakes";
+import { FakeChat, FakeDecider, FakeGeocoder, FakeLlm, FakeRouter } from "../testing/fakes";
 import { Engine } from "./engine";
 
 const ALEX = "+19195550001";
@@ -57,6 +57,7 @@ const DRAFT: ItineraryDraft = {
 
 let chat: FakeChat;
 let llm: FakeLlm;
+let decider: FakeDecider;
 let repo: Repo;
 let engine: Engine;
 let now: Date;
@@ -71,6 +72,7 @@ beforeEach(async () => {
   chat = new FakeChat();
   chat.blocked.add(BLOCKED);
   llm = new FakeLlm();
+  decider = new FakeDecider();
   repo = new Repo(await createMemoryDb());
   now = new Date("2026-10-10T14:00:00Z");
   const planner = new Planner({
@@ -85,6 +87,7 @@ beforeEach(async () => {
     chat,
     llm,
     planner,
+    decider,
     config: {
       publicBaseUrl: "https://trip.example",
       minMembers: 2,
@@ -102,111 +105,93 @@ async function tripOf(handle: string) {
   return active.trip;
 }
 
-async function onboard(): Promise<void> {
-  await say(ALEX, "newtrip Fall break");
-  expect(chat.lastTextTo(ALEX)).toContain("first name");
+/** The demo opening: new trip → three bubbles → names → straight into the first question. */
+async function join(): Promise<void> {
+  await say(ALEX, "new trip");
+  const trip = await tripOf(ALEX);
+  expect(trip.phase).toBe("planning");
+  expect(chat.textsTo(ALEX)).toEqual([
+    "🚗 Trip started! Send the join message to your friends to join the trip!",
+    `join ${trip.inviteCode}`,
+    "What's your first name?",
+  ]);
   await say(ALEX, "I'm alex");
-  expect(chat.lastTextTo(ALEX)).toContain("Nice to meet you, Alex");
+  expect(chat.lastTextTo(ALEX)).toContain("Hey Alex! 📍 Where to?");
 
-  await say(ALEX, `invite 919-555-0002, ${BLOCKED}`);
-  expect(chat.lastTextTo(SAM)).toContain("Alex invited you");
-  expect(chat.lastTextTo(ALEX)).toContain("can't message …0099");
-
-  await say(SAM, "hey what's this?");
-  expect(chat.lastTextTo(SAM)).toContain("Reply `join`");
-  await say(SAM, "join");
+  await say(SAM, `join ${trip.inviteCode.toLowerCase()}`);
+  expect(chat.lastTextTo(SAM)).toBe("🎉 You're in Alex's trip! What's your first name?");
   await say(SAM, "Sam");
-  expect(chat.lastTextTo(ALEX)).toContain("Sam joined the trip (2/2 in)");
-
-  await say(ALEX, "ready");
-  expect(chat.lastTextTo(ALEX)).toContain("Waiting on: Sam");
-  await say(SAM, "Ready!");
-  expect((await tripOf(ALEX)).phase).toBe("planning");
-  expect(chat.lastTextTo(SAM)).toContain("Where are you starting from?");
+  expect(chat.lastTextTo(SAM)).toContain("Hey Sam! 📍 Where to?");
+  expect(chat.lastTextTo(ALEX)).toBe("👋 Sam joined!");
 }
 
-async function plan(): Promise<void> {
-  llm.on(
-    "predefined_extraction",
-    {
-      startLocation: "Chapel Hill, NC",
-      endLocation: "Asheville, NC",
-      startDate: "2026-10-17",
-      endDate: "2026-10-18",
-      tripType: "round_trip",
-      budgetPerPersonUsd: null,
-      dietaryRestrictions: null,
-    },
-    {
-      startLocation: null,
-      endLocation: null,
-      startDate: null,
-      endDate: null,
-      tripType: null,
-      budgetPerPersonUsd: null,
-      dietaryRestrictions: ["halal"],
-    },
-    {
-      startLocation: "Chapel Hill, NC",
-      endLocation: "Boone, NC",
-      startDate: "2026-10-24",
-      endDate: "2026-10-25",
-      tripType: "round_trip",
-      budgetPerPersonUsd: 150,
-      dietaryRestrictions: [],
-    },
+/** Both members answer the grouped questions; Alex's are all read deterministically. */
+async function answer(): Promise<void> {
+  await say(ALEX, "Chapel Hill to Asheville");
+  expect(chat.lastTextTo(ALEX)).toBe("👍 Chapel Hill → Asheville (round trip)\n📅 When? e.g. Oct 18–19");
+  await say(ALEX, "oct 17-18");
+  expect(chat.lastTextTo(ALEX)).toMatch(/^👍 Sat, Oct 17 – Sun, Oct 18\n💵 Budget per person/);
+  await say(ALEX, "$200, halal");
+  expect(chat.lastTextTo(ALEX)).toMatch(/^👍 \$200\/person · halal\n✨ Anything else/);
+  expect(llm.calls).toEqual([]);
+
+  decider.onChoose("wish_category", { value: "activities", confidence: 0.9 });
+  await say(ALEX, "a waterfall hike");
+  expect(chat.lastTextTo(ALEX)).toBe(
+    "✅ You're all set!\n• 📍 Chapel Hill → Asheville (round trip)\n• 📅 Sat, Oct 17 – Sun, Oct 18\n• 💵 $200 · 🥗 halal\n• ✨ a waterfall hike\n⏳ Waiting on Sam…",
   );
-  await say(ALEX, "Chapel Hill to Asheville, Oct 17-18, there and back");
-  expect(chat.lastTextTo(ALEX)).toContain("budget per person");
-  await say(ALEX, "$200");
-  expect(chat.lastTextTo(ALEX)).toContain("dietary restrictions");
-  await say(ALEX, "I eat halal");
-  expect(chat.lastTextTo(ALEX)).toContain("Must-haves saved");
 
-  await say(SAM, "Chapel Hill to Boone Oct 24-25 round trip, 150 bucks, no restrictions");
-  expect(chat.lastTextTo(SAM)).toContain("Must-haves saved");
-
-  llm.on("optional_extraction", { requirements: [{ category: "activities", text: "Visit a waterfall" }] });
-  await say(ALEX, "I'd love a waterfall hike");
-  expect(chat.lastTextTo(ALEX)).toContain("Noted: Visit a waterfall");
-
-  await say(ALEX, "ready");
-  expect(chat.lastTextTo(SAM)).toContain("Alex is ready (1/2)");
+  // Sam: a sentence (Gemini reads it), a misspelled month, budget + "no restrictions".
+  llm.on("predefined_extraction", {
+    startLocation: "Chapel Hill, NC",
+    endLocation: "Boone, NC",
+    startDate: null,
+    endDate: null,
+    tripType: null,
+    budgetPerPersonUsd: null,
+    dietaryRestrictions: null,
+  });
+  await say(SAM, "we wanna go from chapel hill to boone");
+  expect(chat.lastTextTo(SAM)).toBe("👍 Chapel Hill, NC → Boone, NC (round trip)\n📅 When? e.g. Oct 18–19");
+  expect(chat.typingTo).toContain(SAM);
+  await say(SAM, "Octobr 24 to 25");
+  expect(chat.lastTextTo(SAM)).toMatch(/^👍 Sat, Oct 24 – Sun, Oct 25/);
+  await say(SAM, "150 bucks, no restrictions");
+  expect(chat.lastTextTo(SAM)).toMatch(/^👍 \$150\/person · no dietary restrictions\n✨/);
 }
 
 describe("Engine end to end", () => {
-  it("runs onboarding → planning → voting → drafting → review → execution", async () => {
-    await onboard();
-    await plan();
+  it("runs join → grouped answers → vote → drafting → review → execution", async () => {
+    await join();
+    await answer();
 
-    // Sam readies up without optional wishes → voting starts with the two differing must-haves.
-    await say(SAM, "ready");
+    // Sam has no extra wishes → both are done → voting starts on the differing route and dates.
+    await say(SAM, "nope");
     const trip = await tripOf(ALEX);
     expect(trip.phase).toBe("voting");
-    const settled = chat.textsTo(ALEX).find((t) => t.includes("Here's what's settled")) ?? "";
-    expect(settled).toContain("Budget: $150/person");
-    expect(settled).toContain("Dietary: halal");
-    expect(chat.lastTextTo(SAM)).toContain("Vote: Where are we going?");
-    expect(chat.sent.some((m) => m.to === SAM && m.card?.url.startsWith("https://trip.example/poll/"))).toBe(true);
+    const settled = chat.textsTo(ALEX).find((t) => t.startsWith("🧮 Everyone's in!")) ?? "";
+    expect(settled).toContain("• 💵 $150/person (lowest budget)");
+    expect(settled).toContain("• 🥗 halal");
+    expect(chat.lastTextTo(SAM)).toBe(
+      "🗳️ Where are we going?\n1️⃣ Chapel Hill → Asheville (round trip)\n2️⃣ Chapel Hill, NC → Boone, NC (round trip)\n3️⃣ Either works for me\nReply with a number",
+    );
 
-    // Route poll: Alex by number, Sam in their own words (mapped by Gemini).
-    llm.on("vote_mapping", (req: LlmRequest<unknown>) => ({
-      optionId: idsIn(req.prompt).find((o) => o.label.includes("Asheville"))?.id ?? null,
-    }));
+    // Route poll: Alex by number, Sam in their own words (mapped by OpenAI Decisions, no Gemini call).
+    decider.onChoose("vote_mapping", (q) => {
+      const c = q.choices.find((o) => o.description.includes("Asheville"));
+      return c ? { value: c.value, confidence: 0.95 } : null;
+    });
     await say(ALEX, "1");
-    expect(chat.lastTextTo(ALEX)).toContain("Counted: Chapel Hill, NC → Asheville, NC");
+    expect(chat.lastTextTo(ALEX)).toBe("🗳️ Got it: Chapel Hill → Asheville (round trip) (1/2 in)");
     await say(SAM, "asheville sounds better tbh");
-    expect(chat.lastTextTo(SAM)).toContain("When are we going?");
-    expect(
-      chat
-        .textsTo(ALEX)
-        .some((t) => t.includes("Where are we going? → *Chapel Hill, NC → Asheville, NC (round trip)*")),
-    ).toBe(true);
+    expect(llm.calls.some((c) => c.task === "vote_mapping")).toBe(false);
+    expect(chat.textsTo(ALEX)).toContain("📊 Chapel Hill → Asheville (round trip) wins! (2/2)");
+    expect(chat.lastTextTo(SAM)).toContain("🗳️ When are we going?");
 
     // Dates poll: tie → revote → Sam says either works (abstain) via the poll widget.
     await say(ALEX, "1");
     await say(SAM, "2");
-    expect(chat.lastTextTo(SAM)).toContain("It's a tie");
+    expect(chat.lastTextTo(SAM)).toContain("🔁 Tie! Revote");
     await say(ALEX, "1");
     const polls = await repo.listPolls(trip.id);
     const datesPoll = polls.find((p) => p.kind === "dates");
@@ -228,18 +213,16 @@ describe("Engine end to end", () => {
     const reviewTrip = await tripOf(ALEX);
     expect(reviewTrip.phase).toBe("review");
     expect(reviewTrip.resolved).toMatchObject({
-      endLocation: "Asheville, NC",
+      endLocation: "Asheville",
       startDate: "2026-10-17",
       budgetPerPersonUsd: 150,
       dietaryRestrictions: ["halal"],
-      adopted: [{ category: "activities", text: "Visit a waterfall" }],
+      adopted: [{ category: "activities", text: "a waterfall hike" }],
     });
     const v1 = await repo.getItinerary(reviewTrip.id, 1);
     expect(v1?.stops[0]?.kind).toBe("origin");
-    expect(v1?.stops.at(-1)?.name).toBe("Home: Chapel Hill, NC");
+    expect(v1?.stops.at(-1)?.name).toBe("Home: Chapel Hill");
     expect(v1?.stops[1]?.departAt).toMatch(/^2026-10-17T/);
-    expect(chat.lastTextTo(SAM)).toContain("Reply `approve`");
-    expect(chat.lastTextTo(SAM)).toContain("Looking Glass Falls");
 
     // Minor feedback → v2, approvals carry over.
     await say(ALEX, "approve");
@@ -255,12 +238,12 @@ describe("Engine end to end", () => {
     expect(v2trip.phase).toBe("review");
     expect(v2trip.currentVersion).toBe(2);
     expect(await repo.listApprovals(v2trip.id, 2)).toHaveLength(1);
-    expect(chat.lastTextTo(ALEX)).toContain("Updated itinerary (v2)");
+    expect(chat.lastTextTo(ALEX)).toContain("Plan updated (v2)");
 
     // Sam approves → everyone has → execution with dashboard cards.
     await say(SAM, "approve");
     expect((await tripOf(ALEX)).phase).toBe("execution");
-    const cards = chat.sent.filter((m) => m.card?.url.endsWith(`/trip/${v2trip.publicId}`));
+    const cards = chat.sent.filter((m) => m.card?.url.endsWith(`/trip/${v2trip.publicId}`) && !m.card.edited);
     expect(cards.map((c) => c.to).sort()).toEqual([ALEX, SAM]);
 
     // On the road: running late at lunch shifts the rest of the day and edits the cards.
@@ -274,28 +257,46 @@ describe("Engine end to end", () => {
     expect(Date.parse(lunchV3?.departAt as string) - Date.parse(lunch?.departAt as string)).toBe(30 * 60_000);
     expect(chat.lastTextTo(ALEX)).toContain("running 30 min behind at Halal Grill");
     expect(chat.sent.some((m) => m.card?.edited)).toBe(true);
-
-    // Every inbound/outbound message is stored per member — inbound here goes through the engine only,
-    // so just check trip events were logged.
-    expect((await repo.listTripsInPhase("execution")).map((t) => t.id)).toEqual([v2trip.id]);
   });
 
   it("aborts when a must-have is still tied after the revote", async () => {
-    await onboard();
-    await plan();
-    await say(SAM, "ready");
+    await join();
+    await answer();
+    await say(SAM, "nope");
     await say(ALEX, "1");
     await say(SAM, "2");
     await say(ALEX, "1");
     await say(SAM, "2");
     const trip = await tripOf(ALEX).catch(() => null);
     expect(trip).toBeNull(); // aborted trips are no longer "active"
-    expect(chat.lastTextTo(SAM)).toContain("couldn't agree");
+    expect(chat.lastTextTo(SAM)).toContain("Couldn't agree");
+  });
+
+  it("waits for a friend before voting, then starts when the last member finishes", async () => {
+    await say(ALEX, "newtrip");
+    await say(ALEX, "Alex");
+    await say(ALEX, "Chapel Hill to Asheville");
+    await say(ALEX, "oct 17-18");
+    await say(ALEX, "$200, halal");
+    await say(ALEX, "nope");
+    expect(chat.lastTextTo(ALEX)).toContain("⏳ Waiting on a friend to join…");
+    expect((await tripOf(ALEX)).phase).toBe("planning");
+
+    const trip = await tripOf(ALEX);
+    await say(SAM, `join ${trip.inviteCode}`);
+    await say(SAM, "Sam");
+    await say(SAM, "Chapel Hill to Asheville");
+    await say(SAM, "oct 17-18");
+    await say(SAM, "$250 none");
+    llm.on("itinerary_draft", DRAFT);
+    await say(SAM, "that's it");
+    // Everyone agrees on route and dates → no poll, straight to drafting.
+    expect(chat.textsTo(SAM).some((t) => t.startsWith("🧮 Everyone's in!"))).toBe(true);
+    expect((await tripOf(ALEX)).phase).not.toBe("planning");
   });
 
   it("lets members of a trip that's on the road start and join the next trip", async () => {
-    // Put both members into an execution-phase trip directly.
-    await onboard();
+    await join();
     const first = await tripOf(ALEX);
     await repo.transition(first.id, "planning", "execution");
 
@@ -307,16 +308,21 @@ describe("Engine end to end", () => {
     expect(chat.lastTextTo(SAM)).toContain("Alex invited you");
     await say(SAM, "join");
     expect((await tripOf(SAM)).id).toBe(second.id);
-    expect(chat.lastTextTo(SAM)).toContain("Round two");
   });
 
   it("only the host can cancel, and help works for anyone", async () => {
     await say(SAM, "help");
     expect(chat.lastTextTo(SAM)).toContain("Commands:");
-    await onboard();
+    await join();
     await say(SAM, "cancel");
     expect(chat.lastTextTo(SAM)).toContain("Only the trip host");
     await say(ALEX, "cancel");
     expect(chat.lastTextTo(SAM)).toContain("cancelled");
+  });
+
+  it("reports numbers Photon won't let it message", async () => {
+    await join();
+    await say(ALEX, `invite ${BLOCKED}`);
+    expect(chat.lastTextTo(ALEX)).toContain("Can't message …0099");
   });
 });

@@ -2,7 +2,7 @@ import { isRecipientNotAllowed } from "../../chat/port";
 import { type ChatCommand, FirstName, type Trip } from "../../schemas";
 import { copy } from "../copy";
 import type { Ctx, Engine, Inbound } from "../engine";
-import { startPlanning } from "./planning";
+import { nextQuestion, startPlanning } from "./planning";
 
 const NAME_PREFIX = /^(?:hi|hey|hello)?[\s,!]*(?:i'?m|i am|my name is|my name's|it'?s|call me|this is|name'?s)\s+/i;
 
@@ -28,9 +28,13 @@ export async function handleOutsider(e: Engine, msg: Inbound, command: ChatComma
       timeZone: e.config.timeZone,
       hostHandle: msg.handle,
       hostChatId: msg.chatId,
+      phase: "planning",
     });
     await e.repo.recordTripEvent(trip.id, "trip_created", { hostId: host.id });
-    await e.sendTo(e.recipient(host), copy.tripCreated(trip));
+    // Three bubbles: the join message stands alone so the host can forward it as-is.
+    await e.sendTo(e.recipient(host), copy.tripCreated());
+    await e.sendTo(e.recipient(host), copy.joinMessage(trip));
+    await e.sendTo(e.recipient(host), copy.askName());
     return;
   }
 
@@ -38,7 +42,7 @@ export async function handleOutsider(e: Engine, msg: Inbound, command: ChatComma
     let target: { trip: Trip; memberId: string } | null = null;
     if (command.code) {
       const trip = await e.repo.getTripByInviteCode(command.code);
-      if (trip?.phase !== "onboarding") {
+      if (trip?.phase !== "onboarding" && trip?.phase !== "planning") {
         await e.sendTo(to, copy.badCode());
         return;
       }
@@ -54,7 +58,8 @@ export async function handleOutsider(e: Engine, msg: Inbound, command: ChatComma
     }
     const member = await e.repo.joinMember(target.memberId, msg.chatId);
     await e.repo.recordTripEvent(target.trip.id, "member_joined", { memberId: member.id });
-    await e.sendTo(e.recipient(member), copy.joined(target.trip));
+    const host = (await e.repo.listMembers(target.trip.id)).find((m) => m.role === "host");
+    await e.sendTo(e.recipient(member), copy.joined(host?.name ?? null));
     return;
   }
 
@@ -75,6 +80,13 @@ export async function captureName(e: Engine, ctx: Ctx): Promise<void> {
   }
   await e.repo.updateMember(ctx.member.id, { name });
   const member = { ...ctx.member, name };
+  if (ctx.trip.phase === "planning") {
+    // Straight into the first question; the others hear that someone joined.
+    const question = nextQuestion(await e.repo.getPredefined(member.id)) ?? copy.askWish();
+    await e.reply(ctx, copy.hello(name, question));
+    if (member.role !== "host") await e.broadcast(ctx.trip.id, copy.someoneJoined(name), member.id);
+    return;
+  }
   if (ctx.trip.phase !== "onboarding") {
     await e.reply(ctx, `Thanks, ${name}!`);
     return;
@@ -86,7 +98,7 @@ export async function captureName(e: Engine, ctx: Ctx): Promise<void> {
   await e.reply(ctx, copy.memberNext(name));
   const all = await e.repo.listMembers(ctx.trip.id);
   const joined = all.filter((m) => m.status === "joined").length;
-  await e.broadcast(ctx.trip.id, copy.someoneJoined(name, joined, all.length), member.id);
+  await e.broadcast(ctx.trip.id, `${copy.someoneJoined(name)} (${joined}/${all.length} in)`, member.id);
 }
 
 export async function handle(e: Engine, ctx: Ctx): Promise<void> {
@@ -100,7 +112,7 @@ export async function handle(e: Engine, ctx: Ctx): Promise<void> {
   await e.reply(ctx, copy.onboardingHint(ctx.member.role === "host"));
 }
 
-async function invite(e: Engine, ctx: Ctx, handles: string[]): Promise<void> {
+export async function invite(e: Engine, ctx: Ctx, handles: string[]): Promise<void> {
   if (ctx.member.role !== "host") return void (await e.reply(ctx, copy.hostOnly()));
   const sent: string[] = [];
   const failed: string[] = [];
@@ -132,7 +144,7 @@ async function checkStart(e: Engine, ctx: Ctx): Promise<void> {
     ...members.filter((m) => m.status === "invited").map((m) => copy.waitingOnInvite(m.handle)),
     ...joined.filter((m) => !m.onboardingReady && m.id !== ctx.member.id).map((m) => e.displayName(m)),
   ];
-  if (joined.length < e.config.minMembers) waiting.push(copy.needMoreMembers(e.config.minMembers));
+  if (joined.length < e.config.minMembers) waiting.push(copy.needMoreMembers());
   if (waiting.length) {
     await e.reply(ctx, copy.waitingToStart(waiting));
     const ready = joined.filter((m) => m.onboardingReady || m.id === ctx.member.id).length;

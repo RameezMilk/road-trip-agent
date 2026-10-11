@@ -81,7 +81,14 @@ export class Repo {
 
   // --- trips ------------------------------------------------------------------------------------
 
-  async createTrip(input: { title: string; timeZone: string; hostHandle: string; hostChatId: string | null }) {
+  async createTrip(input: {
+    title: string;
+    timeZone: string;
+    hostHandle: string;
+    hostChatId: string | null;
+    /** New trips start in `planning` (members answer as they join); `onboarding` keeps the old ready gate. */
+    phase?: "onboarding" | "planning";
+  }) {
     return this.db.transaction(async (tx) => {
       const [trip] = await tx
         .insert(t.trips)
@@ -90,7 +97,7 @@ export class Repo {
           publicId: newPublicId(),
           inviteCode: newInviteCode(),
           title: input.title,
-          phase: "onboarding",
+          phase: input.phase ?? "onboarding",
           timeZone: input.timeZone,
         })
         .returning();
@@ -176,13 +183,19 @@ export class Repo {
     return row ? { trip: toTrip(row.trip), member: toMember(row.member) } : null;
   }
 
-  /** Invites still waiting for this handle, newest first (only trips still onboarding). */
+  /** Invites still waiting for this handle, newest first (only trips still taking members). */
   async findPendingInvites(handle: string): Promise<Array<{ trip: Trip; member: Member }>> {
     const rows = await this.db
       .select({ trip: t.trips, member: t.members })
       .from(t.members)
       .innerJoin(t.trips, eq(t.members.tripId, t.trips.id))
-      .where(and(eq(t.members.handle, handle), eq(t.members.status, "invited"), eq(t.trips.phase, "onboarding")))
+      .where(
+        and(
+          eq(t.members.handle, handle),
+          eq(t.members.status, "invited"),
+          inArray(t.trips.phase, ["onboarding", "planning"]),
+        ),
+      )
       .orderBy(desc(t.members.createdAt));
     return rows.map((r) => ({ trip: toTrip(r.trip), member: toMember(r.member) }));
   }
