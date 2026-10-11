@@ -98,10 +98,16 @@ if (spectrum) {
 }
 
 let stopping = false;
+/**
+ * Graceful: finish in-flight work (a message being handled, a stop swap, an itinerary draft) before
+ * disconnecting, capped at 90 s. A second signal exits immediately.
+ */
 async function shutdown(signal: string) {
-  if (stopping) return;
+  if (stopping) process.exit(1);
   stopping = true;
-  log("shutdown", { signal });
+  log("shutdown", { signal, draining: true });
+  await Promise.race([engine.settled(), new Promise((resolve) => setTimeout(resolve, 90_000))]);
+  log("shutdown_drained");
   server.close();
   await spectrum?.stop().catch(() => undefined);
   await close().catch(() => undefined);
