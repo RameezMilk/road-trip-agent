@@ -90,7 +90,7 @@ export const Itinerary = z.strictObject({
   startLocation: Place,
   endLocation: Place,
   tripType: TripType,
-  stops: z.array(ItineraryStop).min(2).max(40),
+  stops: z.array(ItineraryStop).min(2).max(150),
   legs: z.array(RouteLeg),
   totals: ItineraryTotals,
   sustainability: Sustainability,

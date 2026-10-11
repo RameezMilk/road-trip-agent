@@ -192,7 +192,9 @@ export function scheduleIssues(itinerary: Itinerary): string[] {
           (a, b) =>
             Math.abs(localMinutes(a.arriveAt as string) - 750) - Math.abs(localMinutes(b.arriveAt as string) - 750),
         )[0];
-      const where = near ? ` — around then the group is at or near ${near.name.replace(/^Stretch break near /, "")}` : "";
+      const where = near
+        ? ` — around then the group is at or near ${near.name.replace(/^Stretch break near /, "")}`
+        : "";
       issues.push(`Day ${day}: no lunch stop (11:30 AM–1:30 PM)${where}.`);
     }
     if (from < 17 * 60 && to > 20 * 60 && !ate(dinner)) issues.push(`Day ${day}: no dinner stop (5:30–8 PM).`);

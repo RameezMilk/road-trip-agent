@@ -39,9 +39,7 @@ These road trips are US-only: set startInUsa / endInUsa to false for a place out
   voteMapping: `Map a voter's free-text reply to the closest poll option id.
 Return null if the reply does not express a preference among the options.`,
 
-  itineraryDraft: (
-    maxStops: number,
-  ) => `You are the planning engine of a group road-trip agent. Use Google Search to find real places that are currently open.
+  itineraryDraft: `You are the planning engine of a group road-trip agent. Use Google Search to find real places that are currently open.
 Return JSON matching the schema. Rules:
 - Follow the group's requirements exactly: route, dates, trip type, budget per person and EVERY dietary restriction (every restaurant must work for all of them).
 - Honour the adopted wishes and decisions.
@@ -59,8 +57,6 @@ Return JSON matching the schema. Rules:
     otherwise add a "rest_stop" (park, overlook or rest area). The drive home on the last day needs breaks too.
   - At most ~8 hours of driving a day; depart 7:30–10 AM; reach lodging by ~9 PM; no driving late at night.
   - A "gas" stop roughly every 250 miles (it can double as a break).
-  - When the stop limit is tight, breaks and meals come before extra attractions.
-- At most ${maxStops} stops in total; fewer is fine for short trips.
 - addressQuery: a street address, or "Place name, City, ST", that OpenStreetMap can find. city: "City, ST".
 - dwellMinutes: time spent at the stop.
 - sustainable: true for low-carbon activities (parks, hikes, walking tours, farm-to-table, local markets, EV charging).

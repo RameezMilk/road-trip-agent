@@ -21,7 +21,7 @@ An iMessage road-trip agent for HackNC 2026 (Devpost due 10:00 AM ET, Oct 11 202
 npm install
 npm run dev            # agent + HTTP on :8787 (tsx watch). Needs DATABASE_URL; runs migrations on boot
 npm start              # same, without watch
-npm run demo:up        # Cloudflare quick tunnel (ngrok fallback) + agent with PUBLIC_BASE_URL and MAX_STOPS=6 set
+npm run demo:up        # Cloudflare quick tunnel (ngrok fallback) + agent with PUBLIC_BASE_URL set
 npm run dev:demo       # dashboard + poll widget for a seeded, visibly labeled DEMO DATA trip (in-memory PGlite, no keys)
 npm run db:migrate     # apply drizzle/* to Tiger Data (boot also does this)
 npm run db:generate    # regenerate SQL after editing src/db/schema.ts (offline)
@@ -205,7 +205,7 @@ Never move it to serverless or edge, because the stream must stay connected.
 | 22 | Round trip or one way is asked | **Round trips only**, never asked; "one way" is ignored | Owner decision: plan round trips only. Saves a turn and a field. One-way support stays in the planner and schemas. |
 | 23 | (unspecified) | Typed places are cleaned to "City, ST" by Gemini **in the background**; reconcile treats "X" and "X, ST" as one place | Deterministic parsing keeps raw text, and a spurious "Wilmington vs Wilmington, NC" vote would kill the demo. |
 | 24 | Use OpenAI's Decisions API to cut latency where it fits | `OpenAiDecider` for free-text votes, sorting the "anything else?" wish, the wish-compatibility check, and the send-off vibe. Gemini is the fallback for every one. | Decisions only *chooses*, so it replaces exactly the Gemini calls that were choices (`VoteMapping`, `OptionalExtraction` on this path, most `ConflictAnalysis` runs). |
-| 25 | (unspecified) | Gemini research runs **speculatively** for every possible poll outcome while people vote; per-task thinking levels; `MAX_STOPS` (6 in the demo); Photon parallel geocoding | Drafts took ~85 s. Now about 11 s of research overlaps the vote, and placing takes about 1–2 s. |
+| 25 | (unspecified) | Gemini research runs **speculatively** for every possible poll outcome while people vote; per-task thinking levels; no cap on stops (owner: the planner uses every stop Gemini picks); Photon parallel geocoding | Drafts took ~85 s. Now about 11 s of research overlaps the vote, and placing takes about 1–2 s. |
 | 26 | Dashboard after everyone approves | `REVIEW_STEP=false` (demo default): the first itinerary goes straight to the road. `REVIEW_STEP=true` restores approve, feedback and polls. | The owner chose to skip the approve turn for the demo. The review tiers stay intact behind the flag. |
 | 27 | (itinerary shown in chat) | **No itinerary text:** "✅ Itinerary ready!", then the card. Revisions and live changes text only a bulleted diff. | The owner asked for a short message plus the mini-app. The card is the itinerary. |
 | 28 | (unspecified) | A send-off ("🏔️ You're set for Asheville! … pack a jacket 🧥") plus the dap GIF on every phone at launch | The demo's ending, requested by the owner. The line comes from a deterministic table keyed by the destination's vibe. |

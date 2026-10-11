@@ -43,8 +43,6 @@ const envSchema = z.object({
     z.enum(["true", "false"]).transform((v) => v === "true"),
     "true",
   ),
-  /** Max planned stops per itinerary. Fewer = faster drafts (the demo uses 6). */
-  MAX_STOPS: withDefault(z.coerce.number().int().min(3).max(15), 12),
   /** `false`: the first itinerary goes straight to the road (no approve round). `true`: everyone approves first. */
   REVIEW_STEP: withDefault(
     z.enum(["true", "false"]).transform((v) => v === "true"),

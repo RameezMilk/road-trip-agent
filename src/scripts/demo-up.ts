@@ -95,14 +95,11 @@ else {
 const { url } = tunnel;
 log("tunnel_up", { url, via: url.includes("ngrok") ? "ngrok" : "cloudflare" });
 
-// Demo defaults that .env can still override: fewer stops = a faster draft.
-const demoDefaults: Record<string, string> = fromDotenv("MAX_STOPS") ? {} : { MAX_STOPS: "6" };
-
 // The environment wins over .env (Node --env-file semantics), so the agent uses the tunnel URL.
 const agent = spawn(process.execPath, ["--import", "tsx", "--env-file-if-exists=.env", "src/index.ts"], {
   cwd: root,
   stdio: "inherit",
-  env: { ...demoDefaults, ...process.env, PUBLIC_BASE_URL: url },
+  env: { ...process.env, PUBLIC_BASE_URL: url },
 });
 
 let stopping = false;

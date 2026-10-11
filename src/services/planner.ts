@@ -31,8 +31,6 @@ export interface PlannerDeps {
   router: Router;
   vehicleMpg: number;
   gasPriceUsdPerGallon: number;
-  /** Cap on planned stops (fewer stops = faster draft and fewer geocoding calls at 1 req/s). */
-  maxStops?: number;
   /**
    * Plan for people (default on): stretch breaks on long drives, meals moved to mealtimes, and one Gemini
    * repair round for whatever still breaks a rule (`domain/humane`). Off in tests that pin exact schedules.
@@ -52,18 +50,14 @@ export interface DraftInput {
   revision?: { previous: Itinerary; instruction: string };
 }
 
-const DEFAULT_MAX_STOPS = 12;
 const HttpUrl = z.url({ protocol: /^https?$/ });
 
 /** Gemini picks places (grounded by Google Search); OSM locates them; OSRM + code compute every number. */
 export class Planner {
-  private readonly maxStops: number;
   /** One-way drive time per start|end, so Gemini can put meals and breaks at the right hours. */
   private readonly driveHints = new Map<string, Promise<string>>();
 
-  constructor(private readonly deps: PlannerDeps) {
-    this.maxStops = deps.maxStops ?? DEFAULT_MAX_STOPS;
-  }
+  constructor(private readonly deps: PlannerDeps) {}
 
   tripDays(resolved: ResolvedRequirements): number {
     return Math.min(14, Math.max(1, daysBetween(resolved.startDate, resolved.endDate) + 1));
@@ -116,7 +110,7 @@ export class Planner {
     const drive = await this.driveHint(resolved);
     return this.deps.llm.generate({
       task: "itinerary_draft",
-      system: SYSTEM.itineraryDraft(this.maxStops),
+      system: SYSTEM.itineraryDraft,
       prompt: `Plan this group road trip.\n${requirementsBlock(resolved, days)}${drive}${revision}`,
       schema: ItineraryDraft,
       webSearch: true,
@@ -161,8 +155,7 @@ export class Planner {
       if (!dayDepartTimes.has(day)) dayDepartTimes.set(day, LocalTime.safeParse(plan.departTime).data ?? "09:00");
       for (const stop of plan.stops) wanted.push({ stop, day });
     }
-    // A couple of spares, so stops that can't be located don't shrink the plan.
-    const candidates = wanted.slice(0, this.maxStops + 2);
+    const candidates = wanted;
     const [origin, ...located] = await Promise.all([
       this.deps.geocoder.geocode(resolved.startLocation),
       ...candidates.map(({ stop, day }) => this.locate(stop, day)),
@@ -187,7 +180,7 @@ export class Planner {
     const dropped: string[] = [];
     candidates.forEach(({ stop }, i) => {
       const hit = located[i];
-      if (hit && placed.length - 1 < this.maxStops) placed.push(hit);
+      if (hit) placed.push(hit);
       else if (!hit) dropped.push(stop.name);
     });
 

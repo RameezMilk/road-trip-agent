@@ -72,11 +72,10 @@ const grounded = await timed("replacement_stop (grounded)", () =>
   }),
 );
 console.log("grounded:", grounded.stop.name);
-const maxStops = config.MAX_STOPS;
-const draft = await timed(`itinerary_draft (grounded, ≤${maxStops} stops)`, () =>
+const draft = await timed("itinerary_draft (grounded)", () =>
   llm.generate({
     task: "itinerary_draft",
-    system: SYSTEM.itineraryDraft(maxStops),
+    system: SYSTEM.itineraryDraft,
     prompt:
       "Plan this group road trip.\nStart: Chapel Hill, NC\nEnd: Asheville, NC\nTrip type: round trip (return to start on the last day)\nDates: 2026-10-18 to 2026-10-19 (2 days)\nBudget: $250 per person for the whole trip\nDietary restrictions (apply to the whole group): halal\nAdopted wishes: [other] beach day\nGroup decisions: none",
     schema: ItineraryDraft,
