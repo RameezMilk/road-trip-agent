@@ -66,6 +66,9 @@ export class SpectrumChat implements ChatPort {
       if (this.seen.has(message.id)) continue;
       this.seen.add(message.id);
       if (this.seen.size > 5000) this.seen.delete(this.seen.values().next().value as string);
+      // Reply on the exact conversation the person wrote from (it carries Photon's routing for their line).
+      const sender = message.sender?.id;
+      if (sender && !(imessage.is(space) && space.type === "group")) this.spaces.set(sender, space);
       try {
         yield await toInbound(space, message);
       } catch (error) {
@@ -87,14 +90,22 @@ export class SpectrumChat implements ChatPort {
     return space;
   }
 
+  /**
+   * Photon briefly refuses numbers that were just added to the project ("Target not allowed"), then
+   * accepts them, so that error gets two short retries before it is reported.
+   */
   private async send(to: Recipient, content: Parameters<Space["send"]>[0]): Promise<Message | undefined> {
     const space = await this.spaceFor(to);
-    try {
-      return (await space.send(content)) as Message | undefined;
-    } catch (error) {
-      if (isRecipientNotAllowed(error)) throw new RecipientNotAllowedError(to.handle);
-      throw error;
+    for (const delayMs of [0, 2000, 5000]) {
+      if (delayMs) await new Promise((resolve) => setTimeout(resolve, delayMs));
+      try {
+        return (await space.send(content)) as Message | undefined;
+      } catch (error) {
+        if (!isRecipientNotAllowed(error)) throw error;
+        this.log("send_not_allowed_retry", { memberId: to.memberId, delayMs });
+      }
     }
+    throw new RecipientNotAllowedError(to.handle);
   }
 
   async sendText(to: Recipient, text: string): Promise<void> {
