@@ -77,6 +77,13 @@ export const DraftStop = z.strictObject({
 });
 export type DraftStop = z.infer<typeof DraftStop>;
 
+/** A route as typed ("chapel hil" → "wilmingtn") normalized to "City, ST". */
+export const PlaceCanonicalization = z.strictObject({
+  startLocation: z.string().min(2).max(120),
+  endLocation: z.string().min(2).max(120),
+});
+export type PlaceCanonicalization = z.infer<typeof PlaceCanonicalization>;
+
 export const ItineraryDraft = z.strictObject({
   title: z.string(),
   rationale: z.string(),

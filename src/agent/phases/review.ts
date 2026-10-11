@@ -25,6 +25,7 @@ export async function startDrafting(
 ): Promise<void> {
   if (!(await e.repo.transition(tripId, from, "drafting"))) return;
   await e.broadcast(tripId, copy.drafting(revision !== null));
+  for (const m of await e.joinedMembers(tripId)) await e.typing(e.recipient(m));
   e.startDraftJob(tripId, revision);
 }
 
@@ -33,7 +34,7 @@ export async function draftItinerary(e: Engine, tripId: string, revision: Revisi
   if (!trip?.resolved) throw new Error("trip has no resolved requirements");
   const previous = await e.currentItinerary(trip);
   const members = await e.joinedMembers(tripId);
-  return e.planner.draft({
+  const input = {
     tripId,
     version: trip.currentVersion + 1,
     title: trip.title,
@@ -41,7 +42,17 @@ export async function draftItinerary(e: Engine, tripId: string, revision: Revisi
     resolved: trip.resolved,
     memberCount: members.length,
     ...(previous && revision ? { revision: { previous, instruction: revision.instruction } } : {}),
-  });
+  };
+  // First draft: research for the winning poll outcome usually started while people voted.
+  const speculative = !previous && !revision ? e.takeSpeculation(tripId, trip.resolved) : null;
+  if (speculative) {
+    const research = await speculative.catch((error) => {
+      e.log("draft_speculation_failed", { tripId, error: String(error) });
+      return null;
+    });
+    if (research) return e.planner.place(input, research);
+  }
+  return e.planner.draft(input);
 }
 
 export async function commitDraft(

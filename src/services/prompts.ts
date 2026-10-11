@@ -25,6 +25,10 @@ Bundle related conflicts into one high-level choice; create at most 3 polls. Eac
 - resolution: the requirement text the planner will follow if it wins.
 If nothing conflicts, return polls: [].`,
 
+  placeCanonicalization: `Normalize the start and end of a US road trip exactly as a traveler typed them.
+Return each as "City, ST" (two-letter state code), or "Place name, City, ST" for a specific spot. Fix misspellings.
+If a place is ambiguous, pick the most likely one given the other end (it's a drivable road trip).`,
+
   voteMapping: `Map a voter's free-text reply to the closest poll option id.
 Return null if the reply does not express a preference among the options.`,
 

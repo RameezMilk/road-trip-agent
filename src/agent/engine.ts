@@ -1,7 +1,8 @@
 import { helpText, parseCommand } from "../chat/commands";
 import type { CardLayout, ChatPort, Recipient } from "../chat/port";
 import type { Repo } from "../db/repo";
-import type { ChatCommand, Itinerary, Member, Trip } from "../schemas";
+import { draftKey } from "../domain/reconcile";
+import type { ChatCommand, Itinerary, ItineraryDraft, Member, ResolvedRequirements, Trip } from "../schemas";
 import { type Decider, noDecider } from "../services/decisions";
 import type { Llm } from "../services/llm";
 import type { Planner } from "../services/planner";
@@ -22,6 +23,12 @@ export interface EngineConfig {
   timeZone: string;
   vehicleMpg: number;
   gasPriceUsdPerGallon: number;
+  /** Everyone approves the first itinerary before the trip starts (default false: straight to the road). */
+  reviewStep?: boolean;
+  /** Also send each voter a poll-widget card (default false: votes are iMessage replies). */
+  pollWidget?: boolean;
+  /** Send-off GIF (skipped when unset or missing). */
+  dapGifPath?: string | null;
 }
 
 export interface EngineDeps {
@@ -70,6 +77,10 @@ export class Engine {
   readonly log: Log;
   private readonly background = new Set<Promise<unknown>>();
   private readonly draftJobs = new Set<string>();
+  /** Speculative itinerary research per trip, keyed by `draftKey` of each possible poll outcome. */
+  private readonly speculative = new Map<string, Map<string, Promise<ItineraryDraft>>>();
+  /** "Do all of this trip's wishes fit together?" answers, so speculation and resolution agree. */
+  readonly wishChecks = new Map<string, boolean>();
 
   constructor(deps: EngineDeps) {
     this.repo = deps.repo;
@@ -293,6 +304,39 @@ export class Engine {
   /** On boot: trips left in `drafting` by a restart get their draft restarted. */
   async resumeDrafting(): Promise<void> {
     for (const trip of await this.repo.listTripsInPhase("drafting")) this.startDraftJob(trip.id, null);
+  }
+
+  /**
+   * Starts Gemini research for every possible outcome of the open polls while people vote, so the
+   * winner's places are usually ready when the vote closes. Only the research is speculative: geocoding,
+   * routing and the schedule run for the winner alone.
+   */
+  speculate(trip: Trip, candidates: ResolvedRequirements[], memberCount: number): void {
+    const byKey = new Map<string, Promise<ItineraryDraft>>();
+    for (const resolved of candidates.slice(0, 4)) {
+      const key = draftKey(resolved);
+      if (byKey.has(key)) continue;
+      const research = this.planner.research({
+        tripId: trip.id,
+        version: 1,
+        title: trip.title,
+        timeZone: trip.timeZone,
+        resolved,
+        memberCount,
+      });
+      this.track(research.catch(() => undefined));
+      byKey.set(key, research);
+    }
+    this.speculative.set(trip.id, byKey);
+    this.log("draft_speculation_started", { tripId: trip.id, candidates: byKey.size });
+  }
+
+  /** The speculative research matching the final requirements, if any; the trip's cache is cleared. */
+  takeSpeculation(tripId: string, resolved: ResolvedRequirements): Promise<ItineraryDraft> | null {
+    const research = this.speculative.get(tripId)?.get(draftKey(resolved)) ?? null;
+    this.speculative.delete(tripId);
+    this.log(research ? "draft_speculation_hit" : "draft_speculation_miss", { tripId });
+    return research;
   }
 
   // --- poll widget (HTTP) ---------------------------------------------------------------------------

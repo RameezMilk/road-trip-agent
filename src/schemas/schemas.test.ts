@@ -12,6 +12,7 @@ import {
   newPollToken,
   newPublicId,
   OptionalExtraction,
+  PlaceCanonicalization,
   PollToken,
   PredefinedExtraction,
   PredefinedRequirements,
@@ -73,6 +74,7 @@ describe("LLM schemas stay inside Gemini's JSON-schema subset", () => {
     FeedbackAssessment,
     LiveUpdate: liveUpdateSchema(["stop_a"]),
     ReplacementStop,
+    PlaceCanonicalization,
   };
   for (const [name, schema] of Object.entries(schemas)) {
     it(`${name} has no oneOf/$ref/pattern`, () => {

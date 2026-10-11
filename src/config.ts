@@ -51,6 +51,8 @@ const envSchema = z.object({
   OPENAI_API_KEY: optionalString,
   OPENAI_DECISIONS_MODEL: withDefault(z.string().min(1), "gpt-6-luna"),
   NOMINATIM_URL: withDefault(z.url(), "https://nominatim.openstreetmap.org"),
+  /** Komoot Photon (OSM) — parallel geocoding first, Nominatim as the fallback. */
+  PHOTON_URL: withDefault(z.url(), "https://photon.komoot.io"),
   OSRM_URL: withDefault(z.url(), "https://router.project-osrm.org"),
   /** Nominatim's usage policy requires an identifying User-Agent. */
   GEO_USER_AGENT: withDefault(

@@ -7,6 +7,7 @@ import {
   OptionalCategory,
   OptionalExtraction,
   Place,
+  PlaceCanonicalization,
   PredefinedExtraction,
   type PredefinedField,
   type PredefinedRequirements,
@@ -81,12 +82,48 @@ async function answer(e: Engine, ctx: Ctx, reqs: PredefinedRequirements): Promis
     result.changed.push("tripType");
   }
   await e.repo.savePredefined(ctx.member.id, ctx.trip.id, result.reqs);
+  if (quick && (result.changed.includes("startLocation") || result.changed.includes("endLocation"))) {
+    canonicalizeLater(e, ctx, result.reqs);
+  }
 
   const ack = acknowledge(result.reqs, result.changed);
   const parts = [ack ?? (result.problems.length ? null : copy.didntCatch()), ...result.problems];
   const next = nextQuestion(result.reqs);
   parts.push(next ?? copy.askWish());
   await e.reply(ctx, parts.filter(Boolean).join("\n"));
+}
+
+/**
+ * Typed places ("chapel hil" → "wilmingtn") become "City, ST" in the background while the member answers
+ * the next question, so the vote, geocoding and dedupe see clean names without making anyone wait.
+ */
+function canonicalizeLater(e: Engine, ctx: Ctx, typed: PredefinedRequirements): void {
+  const { startLocation: start, endLocation: end } = typed;
+  if (!start || !end) return;
+  const tripId = ctx.trip.id;
+  const memberId = ctx.member.id;
+  const job = (async () => {
+    const out = await e.llm.generate({
+      task: "place_canonicalization",
+      system: SYSTEM.placeCanonicalization,
+      prompt: `Start: ${start}\nEnd: ${end}`,
+      schema: PlaceCanonicalization,
+    });
+    const startPlace = Place.safeParse(out.startLocation);
+    const endPlace = Place.safeParse(out.endLocation);
+    if (!startPlace.success || !endPlace.success) return;
+    await e.queue.run(tripId, async () => {
+      if ((await e.repo.getTrip(tripId))?.phase !== "planning") return; // the vote already used them
+      const current = await e.repo.getPredefined(memberId);
+      if (current.startLocation !== start || current.endLocation !== end) return; // changed meanwhile
+      await e.repo.savePredefined(memberId, tripId, {
+        ...current,
+        startLocation: startPlace.data,
+        endLocation: endPlace.data,
+      });
+    });
+  })().catch((error) => e.log("place_canonicalization_failed", { error: String(error) }));
+  e.track(job);
 }
 
 /** The group question being answered decides which reader runs. */

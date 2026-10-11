@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { Poll, PollVote } from "../schemas";
 import { diffItineraries, formatDiff } from "./diff";
-import { type CompleteRequirements, missingFields, predefinedPolls, reconcilePredefined } from "./reconcile";
+import {
+  type CompleteRequirements,
+  draftKey,
+  missingFields,
+  predefinedPolls,
+  reconcilePredefined,
+  unifyPlaces,
+} from "./reconcile";
 import { buildItinerary, currentStopIndex, finalizeItinerary, shiftSchedule } from "./schedule";
 import { tally, tiebreak } from "./tally";
 import { LEGS, PLACED, RESOLVED } from "./test-fixtures";
@@ -51,6 +58,27 @@ describe("reconcilePredefined", () => {
 
   it("lists missing fields in ask order", () => {
     expect(missingFields({ ...base, startDate: null, tripType: null })).toEqual(["startDate", "tripType"]);
+  });
+});
+
+describe("unifyPlaces / draftKey", () => {
+  it("treats a name without a state as the one stated variant", () => {
+    const same = unifyPlaces(["Wilmington", "Wilmington, NC", "Chapel Hill"]);
+    expect(same("Wilmington")).toBe("Wilmington, NC");
+    expect(same("Chapel Hill")).toBe("Chapel Hill");
+    const ambiguous = unifyPlaces(["Wilmington", "Wilmington, NC", "Wilmington, DE"]);
+    expect(ambiguous("Wilmington")).toBe("Wilmington");
+  });
+
+  it("ignores decisions and ordering when matching draft requests", () => {
+    const a = { ...RESOLVED, dietaryRestrictions: ["halal", "Vegan"], decisions: [] };
+    const b = {
+      ...RESOLVED,
+      dietaryRestrictions: ["vegan", "halal"],
+      decisions: [{ pollId: "poll_x", question: "Where?", winningLabel: "A", votes: 2, voters: 2 }],
+    };
+    expect(draftKey(a)).toBe(draftKey(b as typeof a));
+    expect(draftKey(a)).not.toBe(draftKey({ ...a, endDate: "2099-01-01" }));
   });
 });
 

@@ -59,20 +59,42 @@ export class Planner {
   }
 
   async draft(input: DraftInput): Promise<Itinerary> {
+    return this.place(input, await this.research(input));
+  }
+
+  /** The slow part: Gemini + Google Search picks the places. The engine may run it speculatively. */
+  research(input: DraftInput): Promise<ItineraryDraft> {
     const { resolved } = input;
     const days = this.tripDays(resolved);
     const revision = input.revision
       ? `\n\nCurrent itinerary:\n${itineraryBlock(input.revision.previous)}\n\nRequested change: ${input.revision.instruction}\nKeep everything else as it is unless the change requires otherwise.`
       : "";
-    const draft = await this.deps.llm.generate({
+    return this.deps.llm.generate({
       task: "itinerary_draft",
       system: SYSTEM.itineraryDraft(this.maxStops),
       prompt: `Plan this group road trip.\n${requirementsBlock(resolved, days)}${revision}`,
       schema: ItineraryDraft,
       webSearch: true,
     });
+  }
 
-    const origin = await this.deps.geocoder.geocode(resolved.startLocation);
+  /** Locates the researched stops (in parallel), routes them, and computes the schedule and totals. */
+  async place(input: DraftInput, draft: ItineraryDraft): Promise<Itinerary> {
+    const { resolved } = input;
+    const days = this.tripDays(resolved);
+    const dayDepartTimes = new Map<number, string>();
+    const wanted: Array<{ stop: DraftStop; day: number }> = [];
+    for (const plan of [...draft.days].sort((a, b) => a.day - b.day)) {
+      const day = Math.min(days, Math.max(1, plan.day));
+      if (!dayDepartTimes.has(day)) dayDepartTimes.set(day, LocalTime.safeParse(plan.departTime).data ?? "09:00");
+      for (const stop of plan.stops) wanted.push({ stop, day });
+    }
+    // A couple of spares, so stops that can't be located don't shrink the plan.
+    const candidates = wanted.slice(0, this.maxStops + 2);
+    const [origin, ...located] = await Promise.all([
+      this.deps.geocoder.geocode(resolved.startLocation),
+      ...candidates.map(({ stop, day }) => this.locate(stop, day)),
+    ]);
     if (!origin) throw new PlanningError(`I couldn't find "${resolved.startLocation}" on the map.`);
     const originStop: PlacedStop = {
       id: newId("stop"),
@@ -91,20 +113,11 @@ export class Planner {
 
     const placed: PlacedStop[] = [originStop];
     const dropped: string[] = [];
-    const dayDepartTimes = new Map<number, string>();
-    let count = 0;
-    for (const plan of [...draft.days].sort((a, b) => a.day - b.day)) {
-      const day = Math.min(days, Math.max(1, plan.day));
-      if (!dayDepartTimes.has(day)) dayDepartTimes.set(day, LocalTime.safeParse(plan.departTime).data ?? "09:00");
-      for (const stop of plan.stops) {
-        if (count >= this.maxStops) break;
-        const located = await this.locate(stop, day);
-        if (located) {
-          placed.push(located);
-          count++;
-        } else dropped.push(stop.name);
-      }
-    }
+    candidates.forEach(({ stop }, i) => {
+      const hit = located[i];
+      if (hit && placed.length - 1 < this.maxStops) placed.push(hit);
+      else if (!hit) dropped.push(stop.name);
+    });
 
     const lastDay = Math.max(...placed.map((s) => s.day));
     if (!placed.some((s) => s.kind === "destination")) {

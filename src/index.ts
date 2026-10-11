@@ -12,7 +12,7 @@ import { createHttpApp } from "./http/app";
 import type { CardRef } from "./schemas";
 import { OpenAiDecider } from "./services/decisions";
 import { GeminiLlm } from "./services/gemini";
-import { NominatimGeocoder, OsrmRouter } from "./services/geo";
+import { FallbackGeocoder, NominatimGeocoder, OsrmRouter, PhotonGeocoder } from "./services/geo";
 import { type Llm, LlmError, type LlmRequest } from "./services/llm";
 import { Planner } from "./services/planner";
 
@@ -43,7 +43,10 @@ if (!decider) log("decisions_not_configured", { note: "OPENAI_API_KEY unset — 
 
 const planner = new Planner({
   llm,
-  geocoder: new NominatimGeocoder(config.NOMINATIM_URL, config.GEO_USER_AGENT, fetch, 1100, log),
+  geocoder: new FallbackGeocoder(
+    new PhotonGeocoder(config.PHOTON_URL, config.GEO_USER_AGENT, fetch, log),
+    new NominatimGeocoder(config.NOMINATIM_URL, config.GEO_USER_AGENT, fetch, 1100, log),
+  ),
   router: new OsrmRouter(config.OSRM_URL, config.GEO_USER_AGENT, fetch, log),
   vehicleMpg: config.VEHICLE_MPG,
   gasPriceUsdPerGallon: config.GAS_PRICE_USD_PER_GALLON,
@@ -87,6 +90,9 @@ const engine = new Engine({
     timeZone: config.TRIP_TIMEZONE,
     vehicleMpg: config.VEHICLE_MPG,
     gasPriceUsdPerGallon: config.GAS_PRICE_USD_PER_GALLON,
+    reviewStep: config.REVIEW_STEP,
+    pollWidget: config.POLL_WIDGET,
+    dapGifPath: config.DAP_GIF_PATH,
   },
   log,
 });

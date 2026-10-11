@@ -75,6 +75,136 @@ export class NominatimGeocoder implements Geocoder {
   }
 }
 
+const PhotonResponse = z.object({
+  features: z.array(
+    z.object({
+      geometry: z.object({ coordinates: z.tuple([z.number(), z.number()]) }),
+      properties: z
+        .object({
+          name: z.string().optional(),
+          housenumber: z.string().optional(),
+          street: z.string().optional(),
+          city: z.string().optional(),
+          county: z.string().optional(),
+          district: z.string().optional(),
+          state: z.string().optional(),
+          countrycode: z.string().optional(),
+        })
+        .loose(),
+    }),
+  ),
+});
+
+const STATE_CODE = /^[A-Z]{2}$/i;
+const norm = (s: string | undefined) =>
+  (s ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+/** Does a Photon hit really answer "Name, City, ST"? (It happily returns a same-name place in another city.) */
+export function photonHitMatches(query: string, p: z.infer<typeof PhotonResponse>["features"][number]["properties"]) {
+  if (p.countrycode && p.countrycode.toUpperCase() !== "US") return false;
+  const segments = query
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const head = norm(segments[0]);
+  const citySegment =
+    segments.length >= 3
+      ? segments[segments.length - 2]
+      : segments.length === 2 && !STATE_CODE.test(segments[1] ?? "")
+        ? segments[1]
+        : undefined;
+  if (!head) return false;
+  const name = norm(p.name);
+  const headMatches = /^\d/.test(head)
+    ? Boolean(p.street && head.includes(norm(p.street).split(" ")[0] ?? "~"))
+    : Boolean(name && (name.includes(head) || head.includes(name)));
+  if (!headMatches) return false;
+  if (!citySegment) return true;
+  const city = norm(citySegment);
+  return [p.city, p.county, p.district, p.name].some((v) => {
+    const n = norm(v);
+    return n && (n === city || n.includes(city) || city.includes(n));
+  });
+}
+
+/**
+ * Komoot Photon (OSM data, photon.komoot.io): no 1 req/s limit, so a draft's stops are located in
+ * parallel (~0.5 s) instead of ~1.1 s each through Nominatim. Fair use: one request per stop, cached.
+ * Hits that don't match the query's name and city are treated as misses.
+ */
+export class PhotonGeocoder implements Geocoder {
+  private readonly cache = new Map<string, Promise<GeocodeResult | null>>();
+
+  constructor(
+    private readonly baseUrl: string,
+    private readonly userAgent: string,
+    private readonly fetchFn: FetchFn = fetch,
+    private readonly log: Log = () => {},
+  ) {}
+
+  geocode(query: string): Promise<GeocodeResult | null> {
+    const key = query.trim().toLowerCase();
+    if (!key) return Promise.resolve(null);
+    let hit = this.cache.get(key);
+    if (!hit) {
+      hit = this.request(query.trim());
+      this.cache.set(key, hit);
+    }
+    return hit;
+  }
+
+  private async request(query: string): Promise<GeocodeResult | null> {
+    const url = new URL("/api/", this.baseUrl);
+    url.searchParams.set("q", query);
+    url.searchParams.set("limit", "1");
+    url.searchParams.set("lang", "en");
+    try {
+      const res = await this.fetchFn(url, {
+        headers: { "User-Agent": this.userAgent, Accept: "application/json" },
+        signal: AbortSignal.timeout(4000),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const [feature] = PhotonResponse.parse(await res.json()).features;
+      if (!feature || !photonHitMatches(query, feature.properties)) return null;
+      const [lng, lat] = feature.geometry.coordinates;
+      const p = feature.properties;
+      const displayName = [
+        p.name,
+        p.housenumber && p.street ? `${p.housenumber} ${p.street}` : p.street,
+        p.city,
+        p.state,
+      ]
+        .filter(Boolean)
+        .join(", ");
+      return { latLng: LatLng.parse({ lat, lng }), displayName: displayName || query };
+    } catch (error) {
+      this.log("photon_failed", { query, error: String(error) });
+      return null;
+    }
+  }
+}
+
+/** Tries each geocoder in order (Photon first for speed, then rate-limited Nominatim). */
+export class FallbackGeocoder implements Geocoder {
+  private readonly geocoders: Geocoder[];
+
+  constructor(...geocoders: Geocoder[]) {
+    this.geocoders = geocoders;
+  }
+
+  async geocode(query: string): Promise<GeocodeResult | null> {
+    for (const g of this.geocoders) {
+      const hit = await g.geocode(query);
+      if (hit) return hit;
+    }
+    return null;
+  }
+}
+
 const OsrmResponse = z.object({
   code: z.string(),
   routes: z

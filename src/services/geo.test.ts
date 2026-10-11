@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { NominatimGeocoder, OsrmRouter, splitAtWaypoints } from "./geo";
+import { FallbackGeocoder, NominatimGeocoder, OsrmRouter, photonHitMatches, splitAtWaypoints } from "./geo";
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -106,5 +106,47 @@ describe("OsrmRouter", () => {
         [0, 2],
       ],
     ]);
+  });
+});
+
+describe("photonHitMatches", () => {
+  it("accepts hits whose name and city match the query", () => {
+    expect(
+      photonHitMatches("Downtown Inn and Suites, Asheville, NC", {
+        name: "Downtown Inn and Suites",
+        city: "Asheville",
+        countrycode: "US",
+      }),
+    ).toBe(true);
+    expect(
+      photonHitMatches("Chapel Hill, NC", { name: "Chapel Hill", state: "North Carolina", countrycode: "US" }),
+    ).toBe(true);
+    expect(
+      photonHitMatches("78 Patton Ave, Asheville, NC", {
+        street: "Patton Avenue",
+        city: "Asheville",
+        countrycode: "US",
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects a same-name place in another city, a different place, or another country", () => {
+    expect(
+      photonHitMatches("Kapadokia Grill, Asheville, NC", {
+        name: "Kapadokia Grill Mediterranean Turkish",
+        city: "Greensboro",
+        countrycode: "US",
+      }),
+    ).toBe(false);
+    expect(photonHitMatches("Sheetz, Morganton, NC", { name: "Morganton", countrycode: "US" })).toBe(false);
+    expect(photonHitMatches("Paris, TX", { name: "Paris", countrycode: "FR" })).toBe(false);
+  });
+});
+
+describe("FallbackGeocoder", () => {
+  it("uses the next geocoder when the first misses", async () => {
+    const hit = { latLng: { lat: 35, lng: -80 }, displayName: "x" };
+    const g = new FallbackGeocoder({ geocode: async () => null }, { geocode: async () => hit });
+    expect(await g.geocode("anything")).toBe(hit);
   });
 });

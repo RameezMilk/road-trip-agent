@@ -6,6 +6,7 @@ import {
   type PredefinedField,
   PredefinedField as PredefinedFieldEnum,
   type PredefinedRequirements,
+  type ResolvedRequirements,
   type TripType,
 } from "../schemas";
 import { formatLocalDate } from "./time";
@@ -58,11 +59,39 @@ function agreement<T>(values: T[], key: (v: T) => string): Agreement<T> {
   return { kind: "differs", options };
 }
 
+const STATE_SUFFIX =
+  / (al|ak|az|ar|ca|co|ct|de|fl|ga|hi|id|il|in|ia|ks|ky|la|me|md|ma|mi|mn|ms|mo|mt|ne|nv|nh|nj|nm|ny|nc|nd|oh|ok|or|pa|ri|sc|sd|tn|tx|ut|vt|va|wa|wv|wi|wy|dc)$/;
+
+/**
+ * "Wilmington" and "Wilmington, NC" in the same trip are one place: a name without a state takes the
+ * stated variant when exactly one exists (two different states stay separate).
+ */
+export function unifyPlaces(places: string[]): (place: string) => string {
+  const variants = new Map<string, Map<string, string>>(); // base → state → original
+  for (const p of places) {
+    const key = placeKey(p);
+    const state = key.match(STATE_SUFFIX)?.[1];
+    if (!state) continue;
+    const base = key.replace(STATE_SUFFIX, "");
+    const byState = variants.get(base) ?? new Map<string, string>();
+    if (!byState.has(state)) byState.set(state, p);
+    variants.set(base, byState);
+  }
+  return (p) => {
+    const key = placeKey(p);
+    if (STATE_SUFFIX.test(key)) return p;
+    const byState = variants.get(key);
+    return byState?.size === 1 ? ([...byState.values()][0] as string) : p;
+  };
+}
+
 export const routeKey = (r: RouteValue) => `${placeKey(r.startLocation)}|${placeKey(r.endLocation)}|${r.tripType}`;
 export const datesKey = (d: DatesValue) => `${d.startDate}|${d.endDate}`;
 
-export function reconcilePredefined(all: CompleteRequirements[]): PredefinedReconciliation {
-  if (all.length === 0) throw new Error("reconcilePredefined needs at least one member");
+export function reconcilePredefined(input: CompleteRequirements[]): PredefinedReconciliation {
+  if (input.length === 0) throw new Error("reconcilePredefined needs at least one member");
+  const same = unifyPlaces(input.flatMap((r) => [r.startLocation, r.endLocation]));
+  const all = input.map((r) => ({ ...r, startLocation: same(r.startLocation), endLocation: same(r.endLocation) }));
   const dietary = distinct(
     all.flatMap((r) => r.dietaryRestrictions).filter((d) => !/^(none|no|n\/a)$/i.test(d.trim())),
     (d) => d.trim().toLowerCase(),
@@ -122,4 +151,21 @@ export function predefinedPolls(tripId: string, rec: PredefinedReconciliation): 
     });
   }
   return polls;
+}
+
+/**
+ * Identity of a draft request: everything the planner reads except `decisions`, which only restate the
+ * route/dates already in the key (optional-poll outcomes land in `adopted`). Used to match speculative drafts.
+ */
+export function draftKey(r: ResolvedRequirements): string {
+  return JSON.stringify([
+    r.startLocation,
+    r.endLocation,
+    r.tripType,
+    r.startDate,
+    r.endDate,
+    r.budgetPerPersonUsd,
+    [...r.dietaryRestrictions].map((d) => d.toLowerCase()).sort(),
+    r.adopted.map((a) => `${a.category}:${a.text.toLowerCase()}`).sort(),
+  ]);
 }

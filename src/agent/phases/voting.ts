@@ -21,13 +21,68 @@ import { copy } from "../copy";
 import type { Ctx, Engine } from "../engine";
 import { applyItineraryDecision, startDrafting } from "./review";
 
-/** planning → voting: settle what everyone agrees on, then poll only where answers differ. */
+/**
+ * planning → voting: settle what everyone agrees on, then poll only where answers differ. While people
+ * vote, Gemini already researches every possible outcome (Engine.speculate).
+ */
 export async function begin(e: Engine, tripId: string): Promise<void> {
   if (!(await e.repo.transition(tripId, "planning", "voting"))) return;
   const rec = reconcilePredefined(await completeRequirements(e, tripId));
+  const fit = await wishesFit(e, tripId);
+  const wishes = fit
+    ? dedupeAdopted((await e.repo.listOptional(tripId)).map((w) => ({ category: w.category, text: w.text })))
+    : [];
   const polls = await e.repo.createPolls(predefinedPolls(tripId, rec));
-  await e.broadcast(tripId, copy.settled(rec, polls.length));
+  await e.broadcast(
+    tripId,
+    copy.settled(
+      rec,
+      polls.length,
+      wishes.map((w) => w.text),
+    ),
+  );
+
+  const trip = await e.repo.getTrip(tripId);
+  if (trip && polls.length && fit) {
+    const routes = rec.route.kind === "agreed" ? [rec.route.value] : rec.route.options;
+    const dates = rec.dates.kind === "agreed" ? [rec.dates.value] : rec.dates.options;
+    const candidates = routes.flatMap((route) =>
+      dates.map((d) => ({
+        ...route,
+        ...d,
+        budgetPerPersonUsd: rec.budgetPerPersonUsd,
+        dietaryRestrictions: rec.dietaryRestrictions,
+        adopted: wishes,
+        decisions: [],
+      })),
+    );
+    e.speculate(trip, candidates, (await e.joinedMembers(tripId)).length);
+  }
   await advance(e, tripId);
+}
+
+/**
+ * Do all the group's wishes fit together? 0–1 wishes always do; otherwise OpenAI Decisions answers in one
+ * fast call. false (or no Decider) means Gemini ConflictAnalysis decides, which can create polls.
+ */
+async function wishesFit(e: Engine, tripId: string): Promise<boolean> {
+  const wishes = await e.repo.listOptional(tripId);
+  if (wishes.length <= 1) return true;
+  const key = `${tripId}:${wishes
+    .map((w) => w.id)
+    .sort()
+    .join(",")}`;
+  const cached = e.wishChecks.get(key);
+  if (cached !== undefined) return cached;
+  const probability = await e.decider.predicate({
+    name: "wishes_compatible",
+    instructions:
+      "These are a road-trip group's wishes. Can ALL of them be satisfied together on one trip, with no wish competing with another for the same time, money or stop?",
+    evidence: wishes.map((w, i) => `${i + 1}. ${w.text}`).join("\n"),
+  });
+  if (probability === null) return false;
+  e.wishChecks.set(key, probability >= 0.5);
+  return probability >= 0.5;
 }
 
 async function completeRequirements(e: Engine, tripId: string): Promise<CompleteRequirements[]> {
@@ -104,6 +159,14 @@ async function resolvePredefined(e: Engine, tripId: string, polls: Poll[]): Prom
 async function analyseOptional(e: Engine, tripId: string, resolved: ResolvedRequirements): Promise<boolean> {
   const reqs = await e.repo.listOptional(tripId);
   if (reqs.length === 0) return false;
+  if (await wishesFit(e, tripId)) {
+    // Already announced with the settled requirements.
+    const adopted = reqs.map((r) => ({ category: r.category, text: r.text }));
+    await e.repo.updateTrip(tripId, {
+      resolved: { ...resolved, adopted: dedupeAdopted([...resolved.adopted, ...adopted]) },
+    });
+    return false;
+  }
   const ids = reqs.map((r) => r.id) as [string, ...string[]];
   let adoptedIds = new Set(ids);
   let pollsSpec: Array<{
@@ -166,6 +229,7 @@ export async function sendPoll(e: Engine, poll: Poll, revote: boolean): Promise<
   const text = copy.pollText(poll, revote);
   for (const m of await e.joinedMembers(poll.tripId)) {
     await e.sendTo(e.recipient(m), text);
+    if (!e.config.pollWidget) continue; // votes are iMessage replies; the widget stays available
     const url = e.pollUrl(await e.repo.pollToken(poll.id, m.id));
     if (!url) continue;
     try {
