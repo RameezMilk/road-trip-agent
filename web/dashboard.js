@@ -2,6 +2,8 @@
 // touch-sized tabs — Map (OpenStreetMap/Leaflet), Schedule, Impact (sustainability energy bars), Trip.
 // Only the active tab scrolls, and only vertically. Refreshes every 20 s.
 (() => {
+  // Skips ngrok's free-tier browser warning on API calls (harmless behind any other tunnel).
+  const SKIP_WARNING = { "ngrok-skip-browser-warning": "1" };
   const ICONS = {
     origin: "🏠",
     destination: "🏁",
@@ -352,7 +354,10 @@
 
   async function load() {
     try {
-      const res = await fetch(`/api/trips/${encodeURIComponent(publicId)}`, { cache: "no-store" });
+      const res = await fetch(`/api/trips/${encodeURIComponent(publicId)}`, {
+        cache: "no-store",
+        headers: SKIP_WARNING,
+      });
       if (res.status === 404) {
         $("title").textContent = "Trip not found";
         $("pane-schedule").innerHTML = `<p class="notice">Open this dashboard from your trip's iMessage card.</p>`;

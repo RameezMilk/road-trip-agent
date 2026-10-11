@@ -32,13 +32,13 @@ export const ChatCommand = z.discriminatedUnion("name", [
 export type ChatCommand = z.infer<typeof ChatCommand>;
 
 export const COMMAND_USAGE: Record<ChatCommandName, string> = {
-  newtrip: "newtrip [trip name] — start planning a new trip (you become the host)",
-  invite: "invite +19195551234, +19195550000 — host only: invite friends by phone number or Apple ID email",
-  join: "join [CODE] — accept a trip invite",
-  ready: "ready — you're done with the current step",
-  approve: "approve — approve the current itinerary",
-  status: "status — where the trip stands",
+  newtrip: "newtrip — start a trip",
+  invite: "invite +19195551234 — host: text a friend an invite",
+  join: "join CODE — join a friend's trip",
+  ready: "ready — done answering",
+  approve: "approve — approve the plan",
+  status: "status — where things stand",
   dashboard: "dashboard — resend the trip dashboard",
-  help: "help — list commands",
-  cancel: "cancel — host only: cancel the trip",
+  help: "help — this list",
+  cancel: "cancel — host: cancel the trip",
 };
