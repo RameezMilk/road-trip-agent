@@ -3,7 +3,7 @@ import { currentStopIndex, finalizeItinerary, shiftSchedule } from "../../domain
 import { formatTime } from "../../domain/time";
 import { type Itinerary, type LiveUpdate, liveUpdateSchema, type Trip } from "../../schemas";
 import { PlanningError } from "../../services/planner";
-import { itineraryBlock, SYSTEM } from "../../services/prompts";
+import { conversationBlock, itineraryBlock, SYSTEM } from "../../services/prompts";
 import { copy } from "../copy";
 import type { Ctx, Engine } from "../engine";
 
@@ -35,12 +35,13 @@ export async function handle(e: Engine, ctx: Ctx): Promise<void> {
   const current = itinerary.stops[currentStopIndex(itinerary, now)];
   const ids = itinerary.stops.map((s) => s.id) as [string, ...string[]];
 
+  const history = await e.repo.recentConversation(ctx.member.id, ctx.msg.messageId).catch(() => []);
   let intent: LiveUpdate;
   try {
     intent = await e.llm.generate({
       task: "live_update",
       system: SYSTEM.liveUpdate,
-      prompt: `Now: ${formatTime(now.toISOString(), itinerary.timeZone)} on ${e.todayIn(itinerary.timeZone)}.\nCurrent stop: [${current?.id}] ${current?.name}\n\n${itineraryBlock(itinerary)}\n\nMessage: """${ctx.msg.text}"""`,
+      prompt: `Now: ${formatTime(now.toISOString(), itinerary.timeZone)} on ${e.todayIn(itinerary.timeZone)}.\nCurrent stop: [${current?.id}] ${current?.name}\n\n${itineraryBlock(itinerary)}\n\n${conversationBlock(history)}Message: """${ctx.msg.text}"""`,
       schema: liveUpdateSchema(ids),
     });
   } catch (error) {

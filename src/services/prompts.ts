@@ -56,7 +56,10 @@ For "conflicting" only: pollQuestion and 2–3 pollOptions, each with the replan
 - "delay": they are running late or stayed longer somewhere. delayMinutes if stated (else null), stopId = the stop where they are delayed (usually the current stop).
 - "replace_stop": swap one specific planned stop for something else. stopId + request (what they want instead).
 - "replan_remaining": a broader change to the rest of the plan. request.
-- "none": a question or chit-chat. reply: a short helpful answer based on the itinerary.`,
+- "none": a question or chit-chat. reply: a short helpful answer based on the itinerary.
+If the message answers the agent's previous question in the recent conversation, combine them into one intent
+(e.g. the member asked to swap a restaurant for a cheaper one, the agent asked which, the member says "Gypsy Queen"
+→ replace_stop with that stop's id and request "a cheaper restaurant"). Ask a clarifying question only if still ambiguous.`,
 
   replacementStop: `You replace one stop on a road trip with a real place found via Google Search.
 The new place must satisfy the request and every dietary restriction, be near the given location and fit between the previous and next stops.
@@ -88,4 +91,11 @@ export function itineraryBlock(it: Itinerary): string {
     `Itinerary v${it.version}: ${it.startLocation} → ${it.endLocation}, ${formatDuration(it.totals.driveSeconds)} driving`,
     ...lines,
   ].join("\n");
+}
+
+/** Recent DM exchange for follow-up context ("Gypsy Queen" answering the agent's "which restaurant?"). */
+export function conversationBlock(turns: Array<{ direction: "inbound" | "outbound"; text: string }>): string {
+  if (turns.length === 0) return "";
+  const lines = turns.map((t) => `${t.direction === "inbound" ? "Member" : "Agent"}: ${t.text.replace(/\s+/g, " ")}`);
+  return `Recent conversation with this member (oldest first) — the new message may answer the agent's last question:\n${lines.join("\n")}\n\n`;
 }

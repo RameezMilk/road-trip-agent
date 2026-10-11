@@ -1,7 +1,7 @@
 import { diffItineraries, formatDiff } from "../../domain/diff";
 import { option, withAbstain } from "../../domain/reconcile";
 import { FeedbackAssessment, type Itinerary, type Poll, type PollOption, type TripPhase } from "../../schemas";
-import { itineraryBlock, requirementsBlock, SYSTEM } from "../../services/prompts";
+import { conversationBlock, itineraryBlock, requirementsBlock, SYSTEM } from "../../services/prompts";
 import { copy, formatItinerary } from "../copy";
 import type { Ctx, Engine } from "../engine";
 import { begin as beginExecution } from "./execution";
@@ -122,12 +122,13 @@ export async function checkAllApproved(e: Engine, tripId: string): Promise<void>
 async function feedback(e: Engine, ctx: Ctx): Promise<void> {
   const itinerary = await e.currentItinerary(ctx.trip);
   if (!itinerary || !ctx.trip.resolved) return;
+  const history = await e.repo.recentConversation(ctx.member.id, ctx.msg.messageId).catch(() => []);
   let assessment: FeedbackAssessment;
   try {
     assessment = await e.llm.generate({
       task: "feedback_assessment",
       system: SYSTEM.feedbackAssessment,
-      prompt: `${requirementsBlock(ctx.trip.resolved, e.planner.tripDays(ctx.trip.resolved))}\n\n${itineraryBlock(itinerary)}\n\nFeedback: """${ctx.msg.text}"""`,
+      prompt: `${requirementsBlock(ctx.trip.resolved, e.planner.tripDays(ctx.trip.resolved))}\n\n${itineraryBlock(itinerary)}\n\n${conversationBlock(history)}Feedback: """${ctx.msg.text}"""`,
       schema: FeedbackAssessment,
     });
   } catch (error) {

@@ -428,6 +428,28 @@ export class Repo {
     await this.db.insert(t.tripEvents).values({ eventId: newId("evt"), occurredAt: new Date(), tripId, type, payload });
   }
 
+  /**
+   * The member's recent text conversation with the agent, oldest first, excluding one event (the message
+   * being handled). Gives follow-ups like "Gypsy Queen" the context of the agent's previous question.
+   */
+  async recentConversation(
+    memberId: string,
+    excludeEventId: string,
+    limit = 6,
+  ): Promise<Array<{ direction: "inbound" | "outbound"; text: string }>> {
+    const rows = await this.db
+      .select({ eventId: t.chatEvents.eventId, direction: t.chatEvents.direction, text: t.chatEvents.text })
+      .from(t.chatEvents)
+      .where(and(eq(t.chatEvents.memberId, memberId), eq(t.chatEvents.kind, "text")))
+      .orderBy(desc(t.chatEvents.occurredAt))
+      .limit(limit + 1);
+    return rows
+      .filter((r) => r.eventId !== excludeEventId && r.text)
+      .slice(0, limit)
+      .reverse()
+      .map((r) => ({ direction: r.direction, text: (r.text as string).slice(0, 400) }));
+  }
+
   async latestChatEvents(limit: number) {
     return this.db.select().from(t.chatEvents).orderBy(desc(t.chatEvents.occurredAt)).limit(limit);
   }

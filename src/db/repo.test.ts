@@ -69,6 +69,49 @@ describe("Repo", () => {
     expect(await repo.latestChatEvents(10)).toHaveLength(1);
   });
 
+  it("returns a member's recent text conversation, oldest first, excluding the current message", async () => {
+    const { trip, host } = await repo.createTrip({
+      title: "t",
+      timeZone: "UTC",
+      hostHandle: "+19195550001",
+      hostChatId: null,
+    });
+    const base = {
+      chatId: "c",
+      tripId: trip.id,
+      memberId: host.id,
+      handle: host.handle,
+      kind: "text",
+      content: {},
+      metadata: {},
+    };
+    await repo.recordChatEvent({
+      ...base,
+      eventId: "e1",
+      occurredAt: new Date("2026-10-10T10:00:00Z"),
+      direction: "inbound",
+      text: "swap a restaurant",
+    });
+    await repo.recordChatEvent({
+      ...base,
+      eventId: "e2",
+      occurredAt: new Date("2026-10-10T10:00:05Z"),
+      direction: "outbound",
+      text: "Which one?",
+    });
+    await repo.recordChatEvent({
+      ...base,
+      eventId: "e3",
+      occurredAt: new Date("2026-10-10T10:00:10Z"),
+      direction: "inbound",
+      text: "Gypsy Queen",
+    });
+    expect(await repo.recentConversation(host.id, "e3")).toEqual([
+      { direction: "inbound", text: "swap a restaurant" },
+      { direction: "outbound", text: "Which one?" },
+    ]);
+  });
+
   it("stores predefined requirements per member and upserts votes", async () => {
     const { trip, host } = await repo.createTrip({
       title: "t",
