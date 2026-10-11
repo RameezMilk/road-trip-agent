@@ -9,6 +9,6 @@ export type Db = PgDatabase<PgQueryResultHKT, typeof schema>;
 export const MIGRATIONS_DIR = new URL("../../drizzle/", import.meta.url);
 
 export function createDb(databaseUrl: string): { db: Db; close: () => Promise<void> } {
-  const sql = postgres(databaseUrl, { ssl: "require", max: 5 });
+  const sql = postgres(databaseUrl, { ssl: "require", max: 5, onnotice: () => {} });
   return { db: drizzle(sql, { schema }) as unknown as Db, close: () => sql.end({ timeout: 5 }) };
 }

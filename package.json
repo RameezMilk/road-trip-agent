@@ -12,6 +12,7 @@
     "dev:demo": "tsx --env-file-if-exists=.env src/scripts/demo.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx --env-file-if-exists=.env src/db/migrate.ts",
+    "db:check": "tsx --env-file-if-exists=.env src/scripts/db-check.ts",
     "db:tail": "tsx --env-file-if-exists=.env src/scripts/db-tail.ts",
     "llm:smoke": "tsx --env-file-if-exists=.env src/scripts/llm-smoke.ts",
     "typecheck": "tsc --noEmit",
