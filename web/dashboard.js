@@ -1,6 +1,7 @@
 // Trip dashboard (Photon mini-app). Reads GET /api/trips/:publicId (TripDashboard schema) and renders four
 // touch-sized tabs — Map (OpenStreetMap/Leaflet), Schedule, Impact (sustainability energy bars), Trip.
-// Only the active tab scrolls, and only vertically. Refreshes every 20 s.
+// The Map tab (and a short inline live card) locks the page; the other tabs scroll the document itself,
+// vertically only, so iMessage's sheet lets the page scroll before it drags to dismiss. Refreshes every 20 s.
 (() => {
   const ICONS = {
     origin: "🏠",
@@ -55,6 +56,15 @@
   // --- layout: the in-thread live bubble is tiny, so it only gets a one-line summary ------------------
   function applyMode() {
     document.body.classList.toggle("bubble", window.innerHeight < 120);
+    applyLock();
+  }
+
+  // iMessage presents the mini-app in a sheet whose drag-to-dismiss gesture claims every vertical swipe
+  // when the page itself can't scroll, which made inner scrolling panes hard to move. So list tabs scroll
+  // the document (the webview's own scroll view, which the sheet defers to) and only the map locks it.
+  // Short views (an inline live card) also lock, so they don't fight the conversation's scrolling.
+  function applyLock() {
+    document.documentElement.classList.toggle("lock", activeTab === "map" || window.innerHeight < 420);
   }
   window.addEventListener("resize", () => {
     applyMode();
@@ -64,7 +74,10 @@
 
   // --- tabs -------------------------------------------------------------------------------------------
   function showTab(name) {
+    const changed = activeTab !== name;
     activeTab = name;
+    applyLock();
+    if (changed) window.scrollTo(0, 0);
     for (const t of TABS) {
       $(`tab-${t}`).setAttribute("aria-selected", String(t === name));
       $(`pane-${t}`).classList.toggle("active", t === name);
@@ -109,6 +122,8 @@
       .toFixed(n >= 100 ? 0 : 2)
       .replace(/\.00$/, "")}`;
   const gmaps = (s) => `https://www.google.com/maps/search/?api=1&query=${s.latLng.lat},${s.latLng.lng}`;
+  const directions = (from, to) =>
+    `https://www.google.com/maps/dir/?api=1&origin=${from.latLng.lat},${from.latLng.lng}&destination=${to.latLng.lat},${to.latLng.lng}&travelmode=driving`;
 
   function currentIndex(stops) {
     const now = Date.now();
@@ -150,7 +165,7 @@
     layer = L.layerGroup().addTo(map);
   }
 
-  function popupHtml(s, it) {
+  function popupHtml(s, it, next) {
     const time = s.arriveAt
       ? `${fmtTime(s.arriveAt, it.timeZone)}${s.departAt ? ` – ${fmtTime(s.departAt, it.timeZone)}` : ""}`
       : `Departs ${fmtTime(s.departAt, it.timeZone)}`;
@@ -162,7 +177,10 @@
       ${s.address ? `<p>${esc(s.address)}</p>` : ""}
       ${s.note ? `<p>${esc(s.note)}</p>` : ""}
       ${s.webEstimateCostPerPersonUsd != null ? `<p>≈ ${money(s.webEstimateCostPerPersonUsd)}/person <span class="tag">Gemini web estimate</span></p>` : ""}
-      <a class="gmaps" href="${gmaps(s)}" target="_blank" rel="noopener" data-external>Open in Google Maps</a>
+      <div class="popup-links">
+        ${next ? `<a class="gmaps go" href="${directions(s, next)}" target="_blank" rel="noopener" data-external>🚗 Directions to ${esc(next.name)}</a>` : ""}
+        <a class="gmaps" href="${gmaps(s)}" target="_blank" rel="noopener" data-external>Open in Google Maps</a>
+      </div>
     </div>`;
   }
 
@@ -191,42 +209,75 @@
         iconAnchor: [18, 18],
         popupAnchor: [0, -18],
       });
-      const marker = L.marker([s.latLng.lat, s.latLng.lng], { icon, title: s.name, riseOnHover: true })
+      const marker = L.marker([s.latLng.lat, s.latLng.lng], {
+        icon,
+        title: s.name,
+        riseOnHover: true,
+        zIndexOffset: i === 0 ? 1000 : 0, // a round trip's final "home" pin would otherwise cover the start
+      })
         .bindTooltip(`<b>${esc(s.name)}</b><br>${esc(fmtTime(s.arriveAt ?? s.departAt, it.timeZone))}`, {
           direction: "top",
           offset: [0, -18],
         })
-        .bindPopup(popupHtml(s, it), { maxWidth: 240, autoPanPadding: [16, 56] })
+        .bindPopup(popupHtml(s, it, it.stops[i + 1]), { maxWidth: 250, autoPanPadding: [16, 64] })
         .addTo(layer);
       markers.set(s.id, marker);
     });
     if (!fitted && it.stops.length) {
-      map.fitBounds(L.latLngBounds(it.stops.map((s) => [s.latLng.lat, s.latLng.lng])), {
-        paddingTopLeft: [24, 60], // keep pins clear of the "Next" chip
-        paddingBottomRight: [24, 24],
-      });
+      fitRoute(false);
       fitted = true;
     }
     const chip = $("map-chip");
     chip.innerHTML = nextUpLine(it, done);
     chip.hidden = !chip.innerHTML;
+    $("map-actions").hidden = !it.stops.length;
   }
 
+  /** Frame every stop, clear of the "Next" chip on top and the action buttons at the bottom. */
+  function fitRoute(animate = true) {
+    const stops = current?.itinerary?.stops ?? [];
+    if (!map || !stops.length) return;
+    map.closePopup();
+    map.fitBounds(L.latLngBounds(stops.map((s) => [s.latLng.lat, s.latLng.lng])), {
+      paddingTopLeft: [24, 64],
+      paddingBottomRight: [24, 72],
+      animate,
+    });
+  }
+
+  /** "Start" button → zoom into the first stop and open its popup, which links directions to stop 2. */
+  function focusStart() {
+    const first = current?.itinerary?.stops[0];
+    if (first) focusStop(first.id, 15);
+  }
+  $("btn-start").addEventListener("click", focusStart);
+  $("btn-route").addEventListener("click", () => fitRoute(true));
+
   /** Schedule tap → switch to the map, fly to the stop, open its popup. */
-  function focusStop(id) {
+  function focusStop(id, zoom = 13) {
     showTab("map");
     const marker = markers.get(id);
     if (!marker || !map) return;
-    // Open the popup when the fly animation ends, or after a beat if animation frames are throttled.
+    // Open the popup when the fly animation ends. If animation frames are throttled and it hasn't ended
+    // after a beat, snap to the stop first: opening mid-flight lets the popup's auto-pan cut the fly short
+    // and leave the stop at the edge of the map.
+    const target = marker.getLatLng();
+    const targetZoom = Math.max(map.getZoom(), zoom);
     let opened = false;
-    const open = () => {
+    const open = (snap) => {
       if (opened) return;
       opened = true;
+      map.off("moveend", onEnd);
+      if (snap) {
+        map.stop();
+        map.setView(target, targetZoom, { animate: false });
+      }
       marker.openPopup();
     };
-    map.once("moveend", open);
-    setTimeout(open, 900);
-    map.flyTo(marker.getLatLng(), Math.max(map.getZoom(), 13), { duration: 0.6 });
+    const onEnd = () => open(false);
+    map.once("moveend", onEnd);
+    setTimeout(() => open(true), 1400);
+    map.flyTo(target, targetZoom, { duration: 0.8 });
   }
 
   // --- panes ------------------------------------------------------------------------------------------
@@ -236,7 +287,7 @@
       const fill = f * 10 - i;
       return `<div class="cell${fill >= 1 ? " on" : fill > 0.25 ? " half" : ""}"></div>`;
     }).join("");
-    return `<div class="meter" role="img" aria-label="${esc(`${title}: ${value} ${unit}`)}">
+    return `<div class="meter card" role="img" aria-label="${esc(`${title}: ${value} ${unit}`)}">
       <div class="label">${esc(title)}</div>
       <div class="value">${esc(value)} <small>${esc(unit)}</small></div>
       <div class="cells">${cells}</div>
@@ -263,7 +314,10 @@
       ]
         .filter(Boolean)
         .join(" · ");
-      html += `<button class="stop${i <= idx ? " done" : ""}" data-id="${esc(s.id)}" type="button">
+      const first = i === 0 || it.stops[i - 1].day !== s.day;
+      const last = i === it.stops.length - 1 || it.stops[i + 1].day !== s.day;
+      const cls = ["stop", i <= idx ? "done" : "", first ? "first" : "", last ? "last" : ""].filter(Boolean).join(" ");
+      html += `<button class="${cls}" data-id="${esc(s.id)}" type="button">
         <span class="time">${esc(fmtTime(s.arriveAt ?? s.departAt, tz))}</span>
         <span class="orb" style="--pin: var(--k-${s.kind})" aria-hidden="true">${ICONS[s.kind]}</span>
         <span class="info"><span class="name">${esc(s.name)}</span><span class="meta">${esc(meta)}</span></span>
@@ -288,10 +342,10 @@
       ${meter("🌱 Green stops", su.totalStops ? su.greenStops / su.totalStops : 0, `${su.greenStops} of ${su.totalStops}`, "stops", "parks, hikes, local food, EV charging")}
       <h2>Totals</h2>
       <div class="stats">
-        <div class="stat"><b>${miles} mi</b><span>${it.routeSource === "osrm" ? "routed (OSRM)" : "estimated"}</span></div>
-        <div class="stat"><b>${fmtDuration(t.driveSeconds)}</b><span>driving</span></div>
-        <div class="stat"><b>${money(t.estimatedCostPerPersonUsd)}</b><span>est. per person${t.overBudget ? " ⚠️" : ""}</span></div>
-        <div class="stat"><b>${money(t.budgetPerPersonUsd)}</b><span>budget per person</span></div>
+        <div class="stat"><i aria-hidden="true">🛣️</i><b>${miles} mi</b><span>${it.routeSource === "osrm" ? "routed (OSRM)" : "estimated"}</span></div>
+        <div class="stat"><i aria-hidden="true">⏱️</i><b>${fmtDuration(t.driveSeconds)}</b><span>driving</span></div>
+        <div class="stat"><i aria-hidden="true">💵</i><b>${money(t.estimatedCostPerPersonUsd)}</b><span>est. per person${t.overBudget ? " ⚠️" : ""}</span></div>
+        <div class="stat"><i aria-hidden="true">🎯</i><b>${money(t.budgetPerPersonUsd)}</b><span>budget per person</span></div>
       </div>
       <p class="foot">Assumptions: ${su.vehicleMpg} mpg, ${money(su.gasPriceUsdPerGallon)}/gal, ${su.co2KgPerGallon} kg CO₂/gal (EPA).
         Fuel ${money(t.fuelCostPerPersonUsd)}/person + Gemini web estimates ${money(t.webEstimateStopCostPerPersonUsd)}/person.</p>`;
@@ -301,8 +355,15 @@
     const it = d.itinerary;
     $("pane-trip").innerHTML = `
       <h2>Crew</h2>
-      <ul class="list">${d.members
-        .map((m) => `<li>${esc(m.name)}${d.phase === "review" ? (m.approved ? " ✅" : " ⏳") : ""}</li>`)
+      <ul class="crew">${d.members
+        .map(
+          (m, i) =>
+            `<li><span class="avatar" style="--hue: ${(i * 67 + 195) % 360}" aria-hidden="true">${esc(
+              [...m.name.trim()][0]?.toUpperCase() ?? "?",
+            )}</span><span class="who">${esc(m.name)}</span>${
+              d.phase === "review" ? `<span class="ok">${m.approved ? "✅ approved" : "⏳ reviewing"}</span>` : ""
+            }</li>`,
+        )
         .join("")}</ul>
       ${
         d.decisions.length
