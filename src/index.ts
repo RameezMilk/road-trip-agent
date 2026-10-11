@@ -10,6 +10,7 @@ import { createDb, MIGRATIONS_DIR } from "./db/client";
 import { Repo } from "./db/repo";
 import { createHttpApp } from "./http/app";
 import type { CardRef } from "./schemas";
+import { OpenAiDecider } from "./services/decisions";
 import { GeminiLlm } from "./services/gemini";
 import { NominatimGeocoder, OsrmRouter } from "./services/geo";
 import { type Llm, LlmError, type LlmRequest } from "./services/llm";
@@ -34,6 +35,11 @@ const unconfiguredLlm: Llm = {
 };
 const llm = config.GEMINI_API_KEY ? new GeminiLlm(config.GEMINI_API_KEY, config.GEMINI_MODEL, log) : unconfiguredLlm;
 if (!config.GEMINI_API_KEY) log("gemini_not_configured");
+
+const decider = config.OPENAI_API_KEY
+  ? new OpenAiDecider(config.OPENAI_API_KEY, config.OPENAI_DECISIONS_MODEL, log)
+  : undefined;
+if (!decider) log("decisions_not_configured", { note: "OPENAI_API_KEY unset — Gemini handles every decision" });
 
 const planner = new Planner({
   llm,
@@ -74,6 +80,7 @@ const engine = new Engine({
   chat: spectrum ?? offlineChat,
   llm,
   planner,
+  ...(decider ? { decider } : {}),
   config: {
     publicBaseUrl: config.PUBLIC_BASE_URL ?? null,
     minMembers: config.MIN_MEMBERS,

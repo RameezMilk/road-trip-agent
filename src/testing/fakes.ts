@@ -3,6 +3,7 @@ import type { z } from "zod";
 import type { CardLayout, ChatPort, Recipient } from "../chat/port";
 import { estimateLeg } from "../domain/geo";
 import type { CardRef, LatLng, RouteLeg } from "../schemas";
+import type { ChooseQuestion, Decider, PredicateQuestion } from "../services/decisions";
 import type { GeocodeResult, Geocoder, Router } from "../services/geo";
 import { type Llm, LlmError, type LlmRequest, type LlmTask } from "../services/llm";
 
@@ -27,6 +28,38 @@ export class FakeLlm implements Llm {
     if (next === undefined) throw new LlmError(request.task, "no scripted answer");
     const raw = typeof next === "function" ? (next as Handler)(request as LlmRequest<unknown>) : next;
     return (request.schema as z.ZodType<T>).parse(raw);
+  }
+}
+
+type ChooseAnswer = { value: string; confidence: number } | null;
+
+/**
+ * Scripted Decider keyed by question name. Unscripted questions return null (= unavailable), which sends
+ * callers down their Gemini fallback, exactly like running without OPENAI_API_KEY.
+ */
+export class FakeDecider implements Decider {
+  readonly asked: string[] = [];
+  private readonly choices = new Map<string, (q: ChooseQuestion) => ChooseAnswer>();
+  private readonly predicates = new Map<string, number | null>();
+
+  onChoose(name: string, answer: ChooseAnswer | ((q: ChooseQuestion) => ChooseAnswer)): this {
+    this.choices.set(name, typeof answer === "function" ? answer : () => answer);
+    return this;
+  }
+
+  onPredicate(name: string, probability: number | null): this {
+    this.predicates.set(name, probability);
+    return this;
+  }
+
+  async choose(q: ChooseQuestion): Promise<ChooseAnswer> {
+    this.asked.push(q.name);
+    return this.choices.get(q.name)?.(q) ?? null;
+  }
+
+  async predicate(q: PredicateQuestion): Promise<number | null> {
+    this.asked.push(q.name);
+    return this.predicates.get(q.name) ?? null;
   }
 }
 

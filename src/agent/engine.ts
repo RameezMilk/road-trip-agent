@@ -2,6 +2,7 @@ import { helpText, parseCommand } from "../chat/commands";
 import type { CardLayout, ChatPort, Recipient } from "../chat/port";
 import type { Repo } from "../db/repo";
 import type { ChatCommand, Itinerary, Member, Trip } from "../schemas";
+import { type Decider, noDecider } from "../services/decisions";
 import type { Llm } from "../services/llm";
 import type { Planner } from "../services/planner";
 import { copy } from "./copy";
@@ -29,6 +30,8 @@ export interface EngineDeps {
   llm: Llm;
   planner: Planner;
   config: EngineConfig;
+  /** Fast constrained choices (OpenAI Decisions); defaults to none, i.e. Gemini everywhere. */
+  decider?: Decider;
   queue?: KeyedQueue;
   clock?: () => Date;
   log?: Log;
@@ -61,6 +64,7 @@ export class Engine {
   readonly llm: Llm;
   readonly planner: Planner;
   readonly config: EngineConfig;
+  readonly decider: Decider;
   readonly queue: KeyedQueue;
   readonly clock: () => Date;
   readonly log: Log;
@@ -73,6 +77,7 @@ export class Engine {
     this.llm = deps.llm;
     this.planner = deps.planner;
     this.config = deps.config;
+    this.decider = deps.decider ?? noDecider;
     this.queue = deps.queue ?? new KeyedQueue();
     this.clock = deps.clock ?? (() => new Date());
     this.log = deps.log ?? (() => {});

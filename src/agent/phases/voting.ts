@@ -1,3 +1,4 @@
+import type { Recipient } from "../../chat/port";
 import {
   type CompleteRequirements,
   isComplete,
@@ -196,14 +197,28 @@ export async function castFromText(e: Engine, ctx: Ctx, poll: Poll): Promise<voi
     optionId = poll.options[Number(numeric[1]) - 1]?.id ?? null;
   } else {
     via = "other_text";
-    optionId = await mapToOption(e, poll, text);
+    optionId = await mapToOption(e, poll, text, e.recipient(ctx.member));
   }
   if (!optionId) return void (await e.reply(ctx, copy.voteUnclear(poll.options.length)));
   await recordVote(e, poll, ctx.member.id, optionId, via, text);
 }
 
-async function mapToOption(e: Engine, poll: Poll, text: string): Promise<string | null> {
+const NO_OPTION = "none";
+
+/** Free-text vote → option: OpenAI Decisions first (fast), Gemini if it's unavailable or unsure. */
+async function mapToOption(e: Engine, poll: Poll, text: string, voter?: Recipient): Promise<string | null> {
+  const decided = await e.decider.choose({
+    name: "vote_mapping",
+    instructions: `A traveler replied to the poll "${poll.question}". Which option does their reply choose?`,
+    evidence: `Reply: ${text}`,
+    choices: [
+      ...poll.options.map((o, i) => ({ value: o.id, description: `${i + 1}. ${o.label}` })),
+      { value: NO_OPTION, description: "The reply doesn't choose any of these options" },
+    ],
+  });
+  if (decided && decided.confidence >= 0.5) return decided.value === NO_OPTION ? null : decided.value;
   const ids = poll.options.map((o) => o.id) as [string, ...string[]];
+  if (voter) await e.typing(voter);
   try {
     const out = await e.llm.generate({
       task: "vote_mapping",
