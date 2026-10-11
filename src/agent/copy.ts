@@ -23,7 +23,7 @@ export const FIELD_LABELS: Record<PredefinedField, string> = {
   endLocation: "destination",
   startDate: "start date",
   endDate: "end date",
-  tripType: "round trip or one way",
+  tripType: "trip type",
   budgetPerPersonUsd: "budget per person",
   dietaryRestrictions: "dietary restrictions",
 };
