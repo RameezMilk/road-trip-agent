@@ -50,8 +50,8 @@ See `CLAUDE.md` for the architecture, rules, and every deviation from the origin
 ## Demo (90 seconds, two phones)
 
 **Pre-flight**
-- [ ] Both phones' numbers are added in the Photon dashboard (the judge uses a registered demo phone).
-- [ ] `assets/dap.gif` exists, and `OPENAI_API_KEY` is in `.env`.
+- [ ] Both phones' numbers are added in the Photon dashboard **with a first name** (the agent greets people by it instead of asking).
+- [ ] The GIF is at `DAP_GIF_PATH` (default `assets/dap.gif`), and `OPENAI_API_KEY` is in `.env`.
 - [ ] `npm run demo:up` shows `demo_ready`. On the ngrok fallback, open any dashboard once on each phone and tap **Visit Site**.
 - [ ] Do one full rehearsal on the same running process (it warms the geocode cache).
 
@@ -59,9 +59,9 @@ See `CLAUDE.md` for the architecture, rules, and every deviation from the origin
 
 | | A (Rameez) | B (judge) |
 |---|---|---|
-| 1 | `new trip` → intro, `join CODE` bubble, "What's your first name?" | |
-| 2 | Forward the `join CODE` bubble to B. Reply `Rameez`. | Send `join CODE` to the agent, then `Sam`. |
-| 3 | `Chapel Hill to Wilmington` | `chapel hill to asheville` |
+| 1 | `new trip` → intro, `join CODE` bubble, "Hey Rameez! 📍 Where from, and where to?" | |
+| 2 | Forward the `join CODE` bubble to B. | Send `join CODE` → "🎉 You're in Rameez's trip, Sam! 📍 Where to?" |
+| 3 | `Chapel Hill to Wilmington` (the host sets the start for everyone) | `asheville` |
 | 4 | `oct 18-19` | `Octobr 18 to 19` |
 | 5 | `$300, halal` | `250, none` |
 | 6 | `beach day` | `nope` |

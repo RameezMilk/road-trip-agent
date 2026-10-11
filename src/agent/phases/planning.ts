@@ -1,6 +1,6 @@
 import { isNoWish, parseBudgetDiet, parseRoute, parseTripType, placeName } from "../../domain/answers";
 import { parseDateRange } from "../../domain/dates";
-import { datesLabel, isComplete, missingFields, tripTypeLabel } from "../../domain/reconcile";
+import { datesLabel, isComplete, missingFields } from "../../domain/reconcile";
 import {
   LocalDate,
   newId,
@@ -20,32 +20,65 @@ import type { Ctx, Engine } from "../engine";
 import { invite } from "./onboarding";
 import { begin as beginVoting } from "./voting";
 
-/** The 7 must-haves, asked as 3 grouped questions (each answer can also cover later ones). */
+/**
+ * The must-haves, asked as 3 grouped questions (each answer can also cover later ones). Trips are always
+ * round trips (never asked), and only the host gives the starting point; guests share it.
+ */
 const STEPS: ReadonlyArray<{ step: PlanningStep; fields: PredefinedField[] }> = [
-  { step: "route", fields: ["startLocation", "endLocation", "tripType"] },
+  { step: "route", fields: ["startLocation", "endLocation"] },
   { step: "dates", fields: ["startDate", "endDate"] },
   { step: "budgetDiet", fields: ["budgetPerPersonUsd", "dietaryRestrictions"] },
 ];
 
+/** What this member still has to answer: the host gives the start; nobody is asked the trip type. */
+export function openFields(reqs: PredefinedRequirements, isHost: boolean): PredefinedField[] {
+  return missingFields(reqs).filter((f) => f !== "tripType" && (isHost || f !== "startLocation"));
+}
+
 /** The next thing to ask: the whole group question, or just the field still missing from it. */
-export function nextQuestion(reqs: PredefinedRequirements): string | null {
-  const missing = missingFields(reqs);
+export function nextQuestion(reqs: PredefinedRequirements, isHost: boolean): string | null {
+  const missing = openFields(reqs, isHost);
   const group = STEPS.find((s) => s.fields.some((f) => missing.includes(f)));
   if (!group) return null;
-  // One end of the route known: ask for the other end only ("🏁 And where to?").
-  if (group.step === "route" && !reqs.startLocation !== !reqs.endLocation) {
+  if (group.step === "route") {
+    if (!isHost) return copy.guestRoute(reqs.startLocation);
+    // One end known: ask for the other end only ("🏁 And where to?").
+    if (!reqs.startLocation && !reqs.endLocation) return copy.stepQuestion("route");
     return copy.question(reqs.startLocation ? "endLocation" : "startLocation");
   }
   const open = group.fields.filter((f) => missing.includes(f));
-  return open.length === group.fields.length || (group.step === "route" && open.length === 2)
+  return open.length === group.fields.length
     ? copy.stepQuestion(group.step)
     : copy.question(open[0] as PredefinedField);
+}
+
+/** The host's starting point (null until they've answered). */
+async function hostStart(e: Engine, tripId: string): Promise<string | null> {
+  const host = (await e.joinedMembers(tripId)).find((m) => m.role === "host");
+  return host ? (await e.repo.getPredefined(host.id)).startLocation : null;
+}
+
+/** Copies the host's starting point (and round trip) to every guest, so all routes start in one place. */
+export async function syncHostStart(e: Engine, tripId: string): Promise<void> {
+  const members = await e.joinedMembers(tripId);
+  const host = members.find((m) => m.role === "host");
+  const start = host ? (await e.repo.getPredefined(host.id)).startLocation : null;
+  if (!start) return;
+  await Promise.all(
+    members
+      .filter((m) => m.role !== "host")
+      .map(async (m) => {
+        const reqs = await e.repo.getPredefined(m.id);
+        if (reqs.startLocation === start && reqs.tripType === "round_trip") return;
+        await e.repo.savePredefined(m.id, tripId, { ...reqs, startLocation: start, tripType: "round_trip" });
+      }),
+  );
 }
 
 /** Legacy trips that went through the onboarding `ready` gate get their first question here. */
 export async function startPlanning(e: Engine, tripId: string): Promise<void> {
   for (const m of await e.joinedMembers(tripId)) {
-    const question = nextQuestion(await e.repo.getPredefined(m.id));
+    const question = nextQuestion(await e.repo.getPredefined(m.id), m.role === "host");
     await e.sendTo(e.recipient(m), `${copy.planningIntro()}${question ? `\n${question}` : ""}`);
   }
 }
@@ -56,12 +89,12 @@ export async function handle(e: Engine, ctx: Ctx): Promise<void> {
   if (ctx.command) return void (await e.reply(ctx, copy.stillCollecting()));
 
   const reqs = await e.repo.getPredefined(ctx.member.id);
-  const missing = missingFields(reqs);
-  if (missing.length) return answer(e, ctx, reqs);
+  const isHost = ctx.member.role === "host";
+  if (openFields(reqs, isHost).length) return answer(e, ctx, reqs);
   if (/\b(change|actually|update|instead|correction|wait)\b/i.test(ctx.msg.text)) {
     const result = await extractWithGemini(e, ctx, reqs, null);
     if (result.changed.length) {
-      await e.repo.savePredefined(ctx.member.id, ctx.trip.id, result.reqs);
+      await save(e, ctx, result.reqs);
       return void (await e.reply(ctx, copy.updated(recap(result.reqs))));
     }
   }
@@ -77,24 +110,31 @@ interface Extraction {
 /** One answer to the current question: deterministic first (instant), Gemini only if that can't read it. */
 async function answer(e: Engine, ctx: Ctx, reqs: PredefinedRequirements): Promise<void> {
   const today = e.todayIn(ctx.trip.timeZone);
-  const asked = missingFields(reqs)[0] ?? null;
-  const quick = parseDeterministic(reqs, ctx.msg.text, today);
+  const isHost = ctx.member.role === "host";
+  const asked = openFields(reqs, isHost)[0] ?? null;
+  const quick = parseDeterministic(reqs, ctx.msg.text, today, isHost);
   const result = quick ? mergePredefined(reqs, quick, today) : await extractWithGemini(e, ctx, reqs, asked);
-  // The route question says "round trip unless you say one way".
-  if (result.reqs.startLocation && result.reqs.endLocation && result.reqs.tripType === null) {
-    result.reqs.tripType = "round_trip";
-    result.changed.push("tripType");
-  }
-  await e.repo.savePredefined(ctx.member.id, ctx.trip.id, result.reqs);
+  await save(e, ctx, result.reqs);
   if (quick && (result.changed.includes("startLocation") || result.changed.includes("endLocation"))) {
     canonicalizeLater(e, ctx, result.reqs);
   }
 
   const ack = acknowledge(result.reqs, result.changed);
   const parts = [ack ?? (result.problems.length ? null : copy.didntCatch()), ...result.problems];
-  const next = nextQuestion(result.reqs);
+  const next = nextQuestion(result.reqs, isHost);
   parts.push(next ?? copy.askWish());
   await e.reply(ctx, parts.filter(Boolean).join("\n"));
+}
+
+/**
+ * Saves a member's answers with the trip-wide rules applied: always a round trip, and a guest's start is
+ * the host's (whatever Gemini read from their message). A host's new start is copied to every guest.
+ */
+async function save(e: Engine, ctx: Ctx, reqs: PredefinedRequirements): Promise<void> {
+  reqs.tripType = "round_trip";
+  if (ctx.member.role !== "host") reqs.startLocation = await hostStart(e, ctx.trip.id);
+  await e.repo.savePredefined(ctx.member.id, ctx.trip.id, reqs);
+  if (ctx.member.role === "host") await syncHostStart(e, ctx.trip.id);
 }
 
 /**
@@ -102,15 +142,17 @@ async function answer(e: Engine, ctx: Ctx, reqs: PredefinedRequirements): Promis
  * the next question, so the vote, geocoding and dedupe see clean names without making anyone wait.
  */
 function canonicalizeLater(e: Engine, ctx: Ctx, typed: PredefinedRequirements): void {
+  // The host typed both ends; a guest typed only the destination (their start is the host's).
+  const isHost = ctx.member.role === "host";
   const { startLocation: start, endLocation: end } = typed;
-  if (!start || !end) return;
+  if (!end || (isHost && !start)) return;
   const tripId = ctx.trip.id;
   const memberId = ctx.member.id;
   const job = (async () => {
     const out = await e.llm.generate({
       task: "place_canonicalization",
       system: SYSTEM.placeCanonicalization,
-      prompt: `Start: ${start}\nEnd: ${end}`,
+      prompt: `Start: ${start ?? end}\nEnd: ${end}`,
       schema: PlaceCanonicalization,
     });
     const startPlace = Place.safeParse(out.startLocation);
@@ -119,12 +161,13 @@ function canonicalizeLater(e: Engine, ctx: Ctx, typed: PredefinedRequirements): 
     await e.queue.run(tripId, async () => {
       if ((await e.repo.getTrip(tripId))?.phase !== "planning") return; // the vote already used them
       const current = await e.repo.getPredefined(memberId);
-      if (current.startLocation !== start || current.endLocation !== end) return; // changed meanwhile
+      if (current.endLocation !== end || (isHost && current.startLocation !== start)) return; // changed meanwhile
       await e.repo.savePredefined(memberId, tripId, {
         ...current,
-        startLocation: startPlace.data,
+        ...(isHost ? { startLocation: startPlace.data } : {}),
         endLocation: endPlace.data,
       });
+      if (isHost) await syncHostStart(e, tripId);
     });
   })().catch((error) => e.log("place_canonicalization_failed", { error: String(error) }));
   e.track(job);
@@ -135,20 +178,25 @@ export function parseDeterministic(
   reqs: PredefinedRequirements,
   text: string,
   today: string,
+  isHost: boolean,
 ): Partial<PredefinedRequirements> | null {
-  const asked = missingFields(reqs)[0] ?? null;
+  const asked = openFields(reqs, isHost)[0] ?? null;
   const step = STEPS.find((s) => asked && s.fields.includes(asked))?.step;
   switch (step) {
     case "route": {
+      // Round trips only: a stated trip type is ignored, and "one way" alone is never a place.
       const route = parseRoute(text);
-      if (route) return route.tripType ? route : { startLocation: route.startLocation, endLocation: route.endLocation };
-      if (asked === "tripType") return parseFieldDeterministic("tripType", text);
-      const tripType = parseTripType(text); // "one way" on its own is never a place
-      if (tripType) return { tripType };
-      // A lone place answers "Where to?" (the destination), or whichever end the follow-up asked for.
+      if (route)
+        return isHost
+          ? { startLocation: route.startLocation, endLocation: route.endLocation }
+          : { endLocation: route.endLocation };
+      if (parseTripType(text)) return {};
       const place = placeName(text);
       if (!place) return null;
-      return reqs.endLocation ? (reqs.startLocation ? null : { startLocation: place }) : { endLocation: place };
+      // Guests only name the destination. The host's question asks "where from" first, so their lone place
+      // is the start, then whichever end the follow-up asked for.
+      if (!isHost) return { endLocation: place };
+      return reqs.startLocation ? (reqs.endLocation ? null : { endLocation: place }) : { startLocation: place };
     }
     case "dates": {
       const range = parseDateRange(text, today);
@@ -170,11 +218,11 @@ export function parseDeterministic(
 function acknowledge(r: PredefinedRequirements, changed: PredefinedField[]): string | null {
   const bits: string[] = [];
   const has = (...fields: PredefinedField[]) => fields.some((f) => changed.includes(f));
-  if (has("startLocation", "endLocation", "tripType") && r.startLocation && r.endLocation) {
-    bits.push(`${r.startLocation} → ${r.endLocation}${r.tripType ? ` (${tripTypeLabel(r.tripType)})` : ""}`);
+  if (has("startLocation", "endLocation") && r.startLocation && r.endLocation) {
+    bits.push(`${r.startLocation} → ${r.endLocation}`);
   } else if (has("startLocation", "endLocation")) {
     bits.push(r.startLocation ? `From ${r.startLocation}` : `To ${r.endLocation ?? ""}`);
-  } else if (has("tripType") && r.tripType) bits.push(tripTypeLabel(r.tripType));
+  }
   if (has("startDate", "endDate") && r.startDate && r.endDate) {
     bits.push(datesLabel({ startDate: r.startDate, endDate: r.endDate }));
   }
@@ -187,9 +235,7 @@ function acknowledge(r: PredefinedRequirements, changed: PredefinedField[]): str
 
 export function recap(r: PredefinedRequirements, wishes: string[] = []): string {
   const lines = [
-    r.startLocation && r.endLocation
-      ? `• 📍 ${r.startLocation} → ${r.endLocation}${r.tripType ? ` (${tripTypeLabel(r.tripType)})` : ""}`
-      : "",
+    r.endLocation ? `• 📍 ${r.startLocation ? `${r.startLocation} → ` : "To "}${r.endLocation}` : "",
     r.startDate && r.endDate ? `• 📅 ${datesLabel({ startDate: r.startDate, endDate: r.endDate })}` : "",
     r.budgetPerPersonUsd !== null || r.dietaryRestrictions
       ? `• 💵 ${r.budgetPerPersonUsd !== null ? `$${r.budgetPerPersonUsd}` : "?"} · 🥗 ${r.dietaryRestrictions?.length ? r.dietaryRestrictions.join(", ") : "no restrictions"}`
@@ -371,9 +417,10 @@ async function classifyWish(
 
 async function ready(e: Engine, ctx: Ctx): Promise<void> {
   const reqs = await e.repo.getPredefined(ctx.member.id);
-  const missing = missingFields(reqs);
+  const isHost = ctx.member.role === "host";
+  const missing = openFields(reqs, isHost);
   if (missing.length) {
-    await e.reply(ctx, `${copy.stillMissing(missing)}\n${nextQuestion(reqs) ?? ""}`.trim());
+    await e.reply(ctx, `${copy.stillMissing(missing)}\n${nextQuestion(reqs, isHost) ?? ""}`.trim());
     return;
   }
   if (ctx.member.requirementsReady) return void (await e.reply(ctx, copy.wishNothing()));
@@ -407,6 +454,7 @@ async function waitingOn(e: Engine, tripId: string): Promise<string[]> {
 /** Voting starts when ≥ MIN_MEMBERS joined, no invite is pending, and every member has finished. */
 export async function maybeBeginVoting(e: Engine, tripId: string): Promise<void> {
   if ((await waitingOn(e, tripId)).length) return;
+  await syncHostStart(e, tripId); // guests who finished before the host named the start
   const members = await e.joinedMembers(tripId);
   const all = await Promise.all(members.map((m) => e.repo.getPredefined(m.id)));
   if (!all.every(isComplete)) return;

@@ -8,7 +8,7 @@ import type { ItineraryDraft } from "../schemas";
 import type { LlmRequest } from "../services/llm";
 import { Planner } from "../services/planner";
 import { FakeChat, FakeDecider, FakeGeocoder, FakeLlm, FakeRouter } from "../testing/fakes";
-import { Engine } from "./engine";
+import { Engine, type EngineDeps } from "./engine";
 
 const ALEX = "+19195550001";
 const SAM = "+19195550002";
@@ -65,7 +65,10 @@ async function say(handle: string, text: string): Promise<void> {
 
 const GIF = join_(tmpdir(), "road-trip-agent-test-dap.gif");
 
-function makeEngine(overrides: Partial<ConstructorParameters<typeof Engine>[0]["config"]> = {}): Engine {
+function makeEngine(
+  overrides: Partial<ConstructorParameters<typeof Engine>[0]["config"]> = {},
+  deps: Partial<EngineDeps> = {},
+): Engine {
   const planner = new Planner({
     llm,
     geocoder: new FakeGeocoder(),
@@ -89,6 +92,7 @@ function makeEngine(overrides: Partial<ConstructorParameters<typeof Engine>[0]["
       ...overrides,
     },
     clock: () => now,
+    ...deps,
   });
 }
 
@@ -120,12 +124,12 @@ async function join(): Promise<void> {
     "What's your first name?",
   ]);
   await say(ALEX, "I'm alex");
-  expect(chat.lastTextTo(ALEX)).toContain("Hey Alex! 📍 Where to?");
+  expect(chat.lastTextTo(ALEX)).toBe("Hey Alex! 📍 Where from, and where to?\ne.g. Chapel Hill to Wilmington");
 
   await say(SAM, `join ${trip.inviteCode.toLowerCase()}`);
   expect(chat.lastTextTo(SAM)).toBe("🎉 You're in Alex's trip! What's your first name?");
   await say(SAM, "Sam");
-  expect(chat.lastTextTo(SAM)).toContain("Hey Sam! 📍 Where to?");
+  expect(chat.lastTextTo(SAM)).toBe("Hey Sam! 📍 Where to? e.g. Asheville");
   expect(chat.lastTextTo(ALEX)).toBe("👋 Sam joined!");
 }
 
@@ -142,7 +146,7 @@ function canonicalizePlaces(): void {
 async function answer(): Promise<void> {
   canonicalizePlaces();
   await say(ALEX, "Chapel Hill to Asheville");
-  expect(chat.lastTextTo(ALEX)).toBe("👍 Chapel Hill → Asheville (round trip)\n📅 When? e.g. Oct 18–19");
+  expect(chat.lastTextTo(ALEX)).toBe("👍 Chapel Hill → Asheville\n📅 When? e.g. Oct 18–19");
   await say(ALEX, "oct 17-18");
   expect(chat.lastTextTo(ALEX)).toMatch(/^👍 Sat, Oct 17 – Sun, Oct 18\n💵 Budget per person/);
   await say(ALEX, "$200, halal");
@@ -153,7 +157,7 @@ async function answer(): Promise<void> {
   decider.onChoose("wish_category", { value: "activities", confidence: 0.9 });
   await say(ALEX, "a waterfall hike");
   expect(chat.lastTextTo(ALEX)).toBe(
-    "✅ You're all set!\n• 📍 Chapel Hill, NC → Asheville, NC (round trip)\n• 📅 Sat, Oct 17 – Sun, Oct 18\n• 💵 $200 · 🥗 halal\n• ✨ a waterfall hike\n⏳ Waiting on Sam…",
+    "✅ You're all set!\n• 📍 Chapel Hill, NC → Asheville, NC\n• 📅 Sat, Oct 17 – Sun, Oct 18\n• 💵 $200 · 🥗 halal\n• ✨ a waterfall hike\n⏳ Waiting on Sam…",
   );
 
   // Sam: a sentence (Gemini reads it), a misspelled month, budget + "no restrictions".
@@ -167,7 +171,7 @@ async function answer(): Promise<void> {
     dietaryRestrictions: null,
   });
   await say(SAM, "we wanna go from chapel hill to boone");
-  expect(chat.lastTextTo(SAM)).toBe("👍 Chapel Hill, NC → Boone, NC (round trip)\n📅 When? e.g. Oct 18–19");
+  expect(chat.lastTextTo(SAM)).toBe("👍 Chapel Hill, NC → Boone, NC\n📅 When? e.g. Oct 18–19");
   expect(chat.typingTo).toContain(SAM);
   await say(SAM, "Octobr 24 to 25");
   expect(chat.lastTextTo(SAM)).toMatch(/^👍 Sat, Oct 24 – Sun, Oct 25/);
@@ -176,6 +180,36 @@ async function answer(): Promise<void> {
 }
 
 describe("Engine end to end", () => {
+  it("takes first names from Photon and gives guests the host's starting point", async () => {
+    const photon: Record<string, string> = { [ALEX]: "Alex", [SAM]: "Sam" };
+    engine = makeEngine({}, { names: { firstName: async (handle) => photon[handle] ?? null } });
+    canonicalizePlaces();
+
+    await say(ALEX, "new trip");
+    const trip = await tripOf(ALEX);
+    expect(chat.textsTo(ALEX)).toEqual([
+      "🚗 Trip started! Send the join message to your friends to join the trip!",
+      `join ${trip.inviteCode}`,
+      "Hey Alex! 📍 Where from, and where to?\ne.g. Chapel Hill to Wilmington",
+    ]);
+    await say(ALEX, "Chapel Hill to Asheville");
+
+    await say(SAM, `join ${trip.inviteCode}`);
+    expect(chat.lastTextTo(SAM)).toBe(
+      "🎉 You're in Alex's trip, Sam!\n📍 Where to? e.g. Asheville\n(leaving from Chapel Hill, NC)",
+    );
+    expect(chat.lastTextTo(ALEX)).toBe("👋 Sam joined!");
+    await say(SAM, "boone");
+    expect(chat.lastTextTo(SAM)).toBe("👍 Chapel Hill, NC → Boone\n📅 When? e.g. Oct 18–19");
+    const sam = await repo.findActiveMembership(SAM);
+    expect(await repo.getPredefined(sam?.member.id as string)).toMatchObject({
+      startLocation: "Chapel Hill, NC",
+      endLocation: "Boone, NC",
+      tripType: "round_trip",
+    });
+    expect(chat.textsTo(SAM).some((t) => t.includes("first name"))).toBe(false);
+  });
+
   it("runs join → grouped answers → vote → drafting → review → execution", async () => {
     await join();
     await answer();
@@ -193,7 +227,7 @@ describe("Engine end to end", () => {
     expect(settled).toContain("• 🥗 halal");
     expect(settled).toContain("• ✨ a waterfall hike");
     expect(chat.lastTextTo(SAM)).toBe(
-      "🗳️ Where are we going?\n1️⃣ Chapel Hill, NC → Asheville, NC (round trip)\n2️⃣ Chapel Hill, NC → Boone, NC (round trip)\n3️⃣ Either works for me\nReply with a number",
+      "🗳️ Where are we going?\n1️⃣ Asheville, NC\n2️⃣ Boone, NC\n3️⃣ Either works for me\nReply with a number",
     );
     expect(chat.sent.some((m) => m.card?.url.includes("/poll/"))).toBe(false); // POLL_WIDGET off
 
@@ -203,10 +237,10 @@ describe("Engine end to end", () => {
       return c ? { value: c.value, confidence: 0.95 } : null;
     });
     await say(ALEX, "1");
-    expect(chat.lastTextTo(ALEX)).toBe("🗳️ Got it: Chapel Hill, NC → Asheville, NC (round trip) (1/2 in)");
+    expect(chat.lastTextTo(ALEX)).toBe("🗳️ Got it: Asheville, NC (1/2 in)");
     await say(SAM, "asheville sounds better tbh");
     expect(llm.calls.some((c) => c.task === "vote_mapping")).toBe(false);
-    expect(chat.textsTo(ALEX)).toContain("📊 Chapel Hill, NC → Asheville, NC (round trip) wins! (2/2)");
+    expect(chat.textsTo(ALEX)).toContain("📊 Asheville, NC wins! (2/2)");
     expect(chat.lastTextTo(SAM)).toContain("🗳️ When are we going?");
 
     // Dates poll: tie → revote → Sam says either works (abstain) via the poll widget.

@@ -41,7 +41,7 @@ export const FIELD_QUESTIONS: Record<PredefinedField, string> = {
 /** The three grouped planning questions (7 must-haves). */
 export type PlanningStep = "route" | "dates" | "budgetDiet";
 export const STEP_QUESTIONS: Record<PlanningStep, string> = {
-  route: "📍 Where to? e.g. Chapel Hill to Wilmington\n(say “one way” if you're not driving back)",
+  route: "📍 Where from, and where to?\ne.g. Chapel Hill to Wilmington",
   dates: "📅 When? e.g. Oct 18–19",
   budgetDiet: "💵 Budget per person + any dietary needs?\ne.g. $300, halal — or $250, none",
 };
@@ -83,6 +83,9 @@ export const copy = {
   badName: () => "Just your first name, please — like “Sam”.",
   hello: (name: string, question: string) => `Hey ${name}! ${question}`,
   joined: (hostName: string | null) => `🎉 You're in${hostName ? ` ${hostName}'s trip` : ""}! What's your first name?`,
+  /** A joiner whose name Photon already knows: straight into their first question. */
+  joinedNamed: (name: string, hostName: string | null, question: string) =>
+    `🎉 You're in${hostName ? ` ${hostName}'s trip` : ""}, ${name}!\n${question}`,
   someoneJoined: (name: string) => `👋 ${name} joined!`,
   invitation: (hostName: string, _trip: Trip) => `👋 ${hostName} invited you on a road trip! Reply \`join\` to hop in.`,
   inviteReport: (sent: string[], failed: string[], already: string[]) =>
@@ -110,6 +113,8 @@ export const copy = {
   planningIntro: () => "🗺️ Planning time — 3 quick questions.",
   stepQuestion: (step: PlanningStep) => STEP_QUESTIONS[step],
   question: (field: PredefinedField) => FIELD_QUESTIONS[field],
+  /** Guests only pick the destination; the host's starting point is shared. */
+  guestRoute: (start: string | null) => `📍 Where to? e.g. Asheville${start ? `\n(leaving from ${start})` : ""}`,
   didntCatch: () => "🤔 Didn't catch that.",
   datePassed: (date: string) => `${formatLocalDate(date)} has passed — pick a future date.`,
   endBeforeStart: () => "The end date is before the start date.",

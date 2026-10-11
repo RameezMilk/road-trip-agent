@@ -69,7 +69,7 @@ Never move it to serverless or edge, because the stream must stay connected.
   - `OsrmRouter`: one multi-waypoint call, with a haversine fallback labeled `estimate`.
   - `Planner`: `research` (Gemini picks places), then `place` (OSM locates them in parallel, and code computes every number). `draft` runs both.
 - **`src/chat/`**:
-  - `ChatPort` is the provider-neutral boundary.
+  - `ChatPort` is the provider-neutral boundary. `NameDirectory` (`PhotonUsers`) supplies first names from the Photon project's users list (Spectrum REST API, Basic `projectId:projectSecret`).
   - `spectrum.ts` is the **only** importer of `spectrum-ts`. It maps the stream, sends text and cards, edits cards in place, and records every outbound message to `chat_events`.
   - `commands.ts` parses text into `ChatCommand`.
 - **`src/db/`**:
@@ -90,11 +90,11 @@ Never move it to serverless or edge, because the stream must stay connected.
 ### Conversation flow (each member in their own DM)
 
 1. **Start and join:**
-   - `newtrip` creates the trip directly in `planning`. The host gets three bubbles: the intro, `join CODE` on its own so it can be forwarded, and "What's your first name?".
-   - Friends send `join CODE`, or `join` after an `invite +1…`, then their name.
-   - After the name, each person goes straight into the questions, and the host hears "👋 Sam joined!".
+   - `newtrip` creates the trip directly in `planning`. The host gets three bubbles: the intro, `join CODE` on its own so it can be forwarded, and "Hey Rameez! 📍 Where from, and where to?".
+   - Friends send `join CODE`, or `join` after an `invite +1…`, and go straight to "📍 Where to?". The host hears "👋 Sam joined!".
+   - First names come from the Photon project's users (`PhotonUsers`, `GET /projects/{id}/users/`, cached). Only someone with no first name on file is asked "What's your first name?".
 2. **Planning:** 3 grouped questions cover the 7 must-haves:
-   - 📍 route: start, end, and round trip unless they say "one way". A lone place ("Wilmington") is read as the destination, and the follow-up asks only for the missing end. "one way" on its own is never read as a place;
+   - 📍 route: **the host** gives start and destination ("Chapel Hill to Wilmington"; a lone place is their start, then "And where to?"). **Guests** only name a destination, and their start is the host's (`syncHostStart`). Every trip is a **round trip** and it's never asked; "one way" is ignored and never read as a place;
    - 📅 dates: one message, e.g. "Oct 18–19";
    - 💵🥗 budget plus diet: "$300, halal".
 
@@ -176,7 +176,7 @@ Never move it to serverless or edge, because the stream must stay connected.
 | 9 | (unspecified) | Trip times are in `TRIP_TIMEZONE` (default `America/New_York`) | We don't collect a time zone, and the demo corridor is in North Carolina. |
 | 10 | Changes are auto, proposed or voted depending on impact | During **execution** (on the road), changes apply immediately and everyone is notified. The three tiers apply during itinerary review. | Last-minute changes on the road can't wait for re-approval. |
 | 11 | Gas savings and carbon footprint | Computed in code from OSRM distance and `VEHICLE_MPG`/`GAS_PRICE_USD_PER_GALLON`, at 8.887 kg CO₂ per gallon (EPA). Carpooling savings are measured against each member driving solo. The dashboard labels all of these as assumptions. | Gemini never supplies distances, times, fuel or CO₂. |
-| 12 | (unspecified) | Each member's first name is captured when they join | Polls, status messages and the dashboard show first names, never phone numbers. |
+| 12 | (unspecified) | Each member's first name is taken from their Photon user record (`firstName`), and asked only if Photon has none | Polls, status messages and the dashboard show first names, never phone numbers. |
 | 13 | (unspecified) | Text messages only. Voice, images and attachments get a "text only for now" reply. | Keeps the MVP small. Voice notes would need to be transcoded first. |
 | 14 | (unspecified) | Planning starts once at least `MIN_MEMBERS` (default 2) people have joined | Stops a host's early `ready` from launching a solo trip. Set it to 1 for solo testing. |
 | 15 | Dashboard only after everyone approves | The card is sent to everyone on full approval, as specified, but `dashboard` also works during review as a preview | Lets the group see the map while they decide, without changing the approval flow. |
@@ -186,7 +186,7 @@ Never move it to serverless or edge, because the stream must stay connected.
 | 19 | Ask the predefined requirements one by one | 3 grouped questions (route · dates · budget + diet). Answers are read deterministically first; dates take abbreviations and misspellings ("Octobr 18 to 19"); Gemini reads the rest. | A 90-second demo can't afford 7 turns per person, or Gemini's 2.5–5 s per answer. |
 | 20 | Everyone sends `ready` before planning | `newtrip` starts in `planning`; people answer as soon as they've joined; voting waits for ≥ `MIN_MEMBERS`, no pending invites and everyone finished | Removes two turns per person and the dead time while the host waits. Late joiners now work until voting starts. |
 | 21 | Optional wishes: as many messages as you like, then `ready` | One "Anything else?" answer: "nope" or a wish. Either finishes the member. | One turn instead of two or more. Later messages are still added as wishes until the vote. |
-| 22 | Round trip or one way is asked | It defaults to **round trip** unless the route answer says "one way", and the question says so | Most trips return home, and it saves a turn. The recap shows it. |
+| 22 | Round trip or one way is asked | **Round trips only**, never asked; "one way" is ignored | Owner decision: plan round trips only. Saves a turn and a field. One-way support stays in the planner and schemas. |
 | 23 | (unspecified) | Typed places are cleaned to "City, ST" by Gemini **in the background**; reconcile treats "X" and "X, ST" as one place | Deterministic parsing keeps raw text, and a spurious "Wilmington vs Wilmington, NC" vote would kill the demo. |
 | 24 | Use OpenAI's Decisions API to cut latency where it fits | `OpenAiDecider` for free-text votes, sorting the "anything else?" wish, the wish-compatibility check, and the send-off vibe. Gemini is the fallback for every one. | Decisions only *chooses*, so it replaces exactly the Gemini calls that were choices (`VoteMapping`, `OptionalExtraction` on this path, most `ConflictAnalysis` runs). |
 | 25 | (unspecified) | Gemini research runs **speculatively** for every possible poll outcome while people vote; per-task thinking levels; `MAX_STOPS` (6 in the demo); Photon parallel geocoding | Drafts took ~85 s. Now about 11 s of research overlaps the vote, and placing takes about 1–2 s. |
@@ -195,3 +195,5 @@ Never move it to serverless or edge, because the stream must stay connected.
 | 28 | (unspecified) | A send-off ("🏔️ You're set for Asheville! … pack a jacket 🧥") plus the dap GIF on every phone at launch | The demo's ending, requested by the owner. The line comes from a deterministic table keyed by the destination's vibe. |
 | 29 | Poll widget for voting | `POLL_WIDGET=false`: votes are iMessage replies only. The widget page and API remain. | Owner request: vote by texting. The feature is disabled, not deleted. |
 | 30 | Dashboard hosted on ngrok | `demo:up` uses a Cloudflare quick tunnel and falls back to ngrok | Cloudflare quick tunnels show no browser warning page. The ngrok header can't be attached to iMessage's own page load. |
+| 31 | Everyone gives a start and an end; differing routes are voted on | **The host sets the start** for everyone. Guests are asked only "Where to?", and the route poll lists destinations only | Owner decision. The group leaves from one place, and the vote is simpler. |
+| 32 | Ask each person's name | Names come from the Photon users list, so nobody is asked unless Photon has no first name for them | Owner decision: Photon already stores registered users' names. One cached list call; on failure the agent just asks. |

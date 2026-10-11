@@ -111,7 +111,9 @@ export function reconcilePredefined(input: CompleteRequirements[]): PredefinedRe
 }
 
 export const tripTypeLabel = (t: TripType) => (t === "round_trip" ? "round trip" : "one way");
-export const routeLabel = (r: RouteValue) => `${r.startLocation} → ${r.endLocation} (${tripTypeLabel(r.tripType)})`;
+// Trips are round trips unless an older trip said otherwise, so only "one way" is ever spelled out.
+export const routeLabel = (r: RouteValue) =>
+  `${r.startLocation} → ${r.endLocation}${r.tripType === "one_way" ? ` (${tripTypeLabel(r.tripType)})` : ""}`;
 export const datesLabel = (d: DatesValue) =>
   d.startDate === d.endDate
     ? formatLocalDate(d.startDate)
@@ -127,17 +129,24 @@ export function withAbstain(options: PollOption[]): PollOption[] {
   return [...options, option(ABSTAIN_LABEL, { kind: "abstain" })];
 }
 
+const sharedStart = (routes: RouteValue[]) =>
+  routes.every((r) => r.startLocation === routes[0]?.startLocation && r.tripType === routes[0]?.tripType);
+
 /** Predefined polls, route first then dates, created queued (the voting phase opens one at a time). */
 export function predefinedPolls(tripId: string, rec: PredefinedReconciliation): NewPoll[] {
   const polls: NewPoll[] = [];
   if (rec.route.kind === "differs") {
+    const routes = rec.route.options;
     polls.push({
       tripId,
       kind: "route",
       question: "Where are we going?",
       status: "queued",
       round: 1,
-      options: withAbstain(rec.route.options.map((r) => option(routeLabel(r), { kind: "route", ...r }))),
+      // Everyone leaves from the host's start, so the options are just destinations.
+      options: withAbstain(
+        routes.map((r) => option(sharedStart(routes) ? r.endLocation : routeLabel(r), { kind: "route", ...r })),
+      ),
     });
   }
   if (rec.dates.kind === "differs") {

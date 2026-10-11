@@ -3,6 +3,7 @@ import { serve } from "@hono/node-server";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import { Engine } from "./agent/engine";
 import { runChatLoop } from "./agent/runtime";
+import { PhotonUsers } from "./chat/photon-users";
 import type { CardLayout, ChatPort, Recipient } from "./chat/port";
 import { SpectrumChat } from "./chat/spectrum";
 import { loadConfig, requireConfig } from "./config";
@@ -54,7 +55,16 @@ const planner = new Planner({
 });
 
 let spectrum: SpectrumChat | null = null;
+let names: PhotonUsers | null = null;
 if (config.SPECTRUM_PROJECT_ID && config.SPECTRUM_PROJECT_SECRET) {
+  names = new PhotonUsers(
+    config.SPECTRUM_CLOUD_URL,
+    config.SPECTRUM_PROJECT_ID,
+    config.SPECTRUM_PROJECT_SECRET,
+    fetch,
+    log,
+  );
+  void names.load(); // warm, so the first `new trip` doesn't wait for it
   spectrum = await SpectrumChat.connect({
     projectId: config.SPECTRUM_PROJECT_ID,
     projectSecret: config.SPECTRUM_PROJECT_SECRET,
@@ -84,6 +94,7 @@ const engine = new Engine({
   llm,
   planner,
   ...(decider ? { decider } : {}),
+  ...(names ? { names } : {}),
   config: {
     publicBaseUrl: config.PUBLIC_BASE_URL ?? null,
     minMembers: config.MIN_MEMBERS,

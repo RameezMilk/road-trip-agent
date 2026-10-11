@@ -1,5 +1,5 @@
 import { helpText, parseCommand } from "../chat/commands";
-import type { CardLayout, ChatPort, Recipient } from "../chat/port";
+import { type CardLayout, type ChatPort, type NameDirectory, noNames, type Recipient } from "../chat/port";
 import type { Repo } from "../db/repo";
 import { draftKey } from "../domain/reconcile";
 import type { ChatCommand, Itinerary, ItineraryDraft, Member, ResolvedRequirements, Trip } from "../schemas";
@@ -39,6 +39,8 @@ export interface EngineDeps {
   config: EngineConfig;
   /** Fast constrained choices (OpenAI Decisions); defaults to none, i.e. Gemini everywhere. */
   decider?: Decider;
+  /** First names from the chat provider (Photon users); defaults to none, i.e. the agent asks. */
+  names?: NameDirectory;
   queue?: KeyedQueue;
   clock?: () => Date;
   log?: Log;
@@ -72,6 +74,7 @@ export class Engine {
   readonly planner: Planner;
   readonly config: EngineConfig;
   readonly decider: Decider;
+  readonly names: NameDirectory;
   readonly queue: KeyedQueue;
   readonly clock: () => Date;
   readonly log: Log;
@@ -89,6 +92,7 @@ export class Engine {
     this.planner = deps.planner;
     this.config = deps.config;
     this.decider = deps.decider ?? noDecider;
+    this.names = deps.names ?? noNames;
     this.queue = deps.queue ?? new KeyedQueue();
     this.clock = deps.clock ?? (() => new Date());
     this.log = deps.log ?? (() => {});

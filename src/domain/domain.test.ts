@@ -49,8 +49,8 @@ describe("reconcilePredefined", () => {
     const polls = predefinedPolls("trip_x", rec);
     expect(polls.map((p) => p.kind)).toEqual(["route", "dates"]);
     expect(polls[0]?.options.map((o) => o.label)).toEqual([
-      "Chapel Hill, NC → Asheville, NC (one way)",
-      "Chapel Hill, NC → Boone, NC (one way)",
+      "Asheville, NC", // same start for everyone → just the destinations
+      "Boone, NC",
       "Either works for me",
     ]);
     expect(polls[1]?.options[0]?.label).toBe("Sat, Oct 17 – Sun, Oct 18");

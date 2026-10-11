@@ -2,7 +2,7 @@ import { isRecipientNotAllowed } from "../../chat/port";
 import { type ChatCommand, FirstName, type Trip } from "../../schemas";
 import { copy } from "../copy";
 import type { Ctx, Engine, Inbound } from "../engine";
-import { nextQuestion, startPlanning } from "./planning";
+import { nextQuestion, startPlanning, syncHostStart } from "./planning";
 
 const NAME_PREFIX = /^(?:hi|hey|hello)?[\s,!]*(?:i'?m|i am|my name is|my name's|it'?s|call me|this is|name'?s)\s+/i;
 
@@ -22,6 +22,8 @@ export function parseFirstName(text: string): string | null {
 /** A sender who isn't in any active trip yet. */
 export async function handleOutsider(e: Engine, msg: Inbound, command: ChatCommand | null): Promise<void> {
   const to = { handle: msg.handle, chatId: msg.chatId, memberId: null, tripId: null };
+  // Photon usually knows the sender's first name (from the project's users), so most people aren't asked.
+  const knownName = command?.name === "newtrip" || command?.name === "join" ? e.names.firstName(msg.handle) : null;
   if (command?.name === "newtrip") {
     const { trip, host } = await e.repo.createTrip({
       title: command.title ?? "Road trip",
@@ -34,7 +36,11 @@ export async function handleOutsider(e: Engine, msg: Inbound, command: ChatComma
     // Three bubbles: the join message stands alone so the host can forward it as-is.
     await e.sendTo(e.recipient(host), copy.tripCreated());
     await e.sendTo(e.recipient(host), copy.joinMessage(trip));
-    await e.sendTo(e.recipient(host), copy.askName());
+    const name = await knownName;
+    if (!name) return void (await e.sendTo(e.recipient(host), copy.askName()));
+    await e.repo.updateMember(host.id, { name });
+    const question = nextQuestion(await e.repo.getPredefined(host.id), true) ?? copy.askWish();
+    await e.sendTo(e.recipient(host), copy.hello(name, question));
     return;
   }
 
@@ -59,7 +65,17 @@ export async function handleOutsider(e: Engine, msg: Inbound, command: ChatComma
     const member = await e.repo.joinMember(target.memberId, msg.chatId);
     await e.repo.recordTripEvent(target.trip.id, "member_joined", { memberId: member.id });
     const host = (await e.repo.listMembers(target.trip.id)).find((m) => m.role === "host");
-    await e.sendTo(e.recipient(member), copy.joined(host?.name ?? null));
+    const name = await knownName;
+    if (!name || target.trip.phase !== "planning") {
+      await e.sendTo(e.recipient(member), copy.joined(host?.name ?? null));
+      return;
+    }
+    // Named by Photon: straight into "Where to?" (with the host's start once known).
+    await e.repo.updateMember(member.id, { name });
+    await syncHostStart(e, target.trip.id);
+    const question = nextQuestion(await e.repo.getPredefined(member.id), false) ?? copy.askWish();
+    await e.sendTo(e.recipient(member), copy.joinedNamed(name, host?.name ?? null, question));
+    await e.broadcast(target.trip.id, copy.someoneJoined(name), member.id);
     return;
   }
 
@@ -82,7 +98,8 @@ export async function captureName(e: Engine, ctx: Ctx): Promise<void> {
   const member = { ...ctx.member, name };
   if (ctx.trip.phase === "planning") {
     // Straight into the first question; the others hear that someone joined.
-    const question = nextQuestion(await e.repo.getPredefined(member.id)) ?? copy.askWish();
+    await syncHostStart(e, ctx.trip.id);
+    const question = nextQuestion(await e.repo.getPredefined(member.id), member.role === "host") ?? copy.askWish();
     await e.reply(ctx, copy.hello(name, question));
     if (member.role !== "host") await e.broadcast(ctx.trip.id, copy.someoneJoined(name), member.id);
     return;

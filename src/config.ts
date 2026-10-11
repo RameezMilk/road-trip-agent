@@ -18,6 +18,11 @@ const envSchema = z.object({
   ),
   SPECTRUM_PROJECT_ID: optionalString,
   SPECTRUM_PROJECT_SECRET: optionalString,
+  /** Spectrum REST API (the users list supplies first names). Same variable the SDK reads. */
+  SPECTRUM_CLOUD_URL: withDefault(
+    z.url().transform((u) => u.replace(/\/+$/, "")),
+    "https://spectrum.photon.codes",
+  ),
   DATABASE_URL: optionalString,
   GEMINI_API_KEY: optionalString,
   GEMINI_MODEL: withDefault(z.string().min(1), "gemini-3.8-flash"),

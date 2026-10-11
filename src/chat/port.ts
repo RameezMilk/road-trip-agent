@@ -40,3 +40,11 @@ export function isRecipientNotAllowed(error: unknown): boolean {
   const text = String((error as { message?: unknown })?.message ?? error);
   return /target not allowed|not allowed for this project/i.test(text);
 }
+
+/** First names for handles, from the chat provider's own user records (Photon project users). */
+export interface NameDirectory {
+  /** The person's first name, or null when the provider doesn't know it (then the agent asks). */
+  firstName(handle: string): Promise<string | null>;
+}
+
+export const noNames: NameDirectory = { firstName: async () => null };
