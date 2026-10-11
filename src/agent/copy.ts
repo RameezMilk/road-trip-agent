@@ -4,7 +4,9 @@ import { datesLabel, routeLabel } from "../domain/reconcile";
 import { formatDuration, formatLocalDate, formatTime } from "../domain/time";
 import type { Itinerary, Poll, PredefinedField, StopKind, Trip } from "../schemas";
 
-// Every message the agent sends lives here, so tone and wording stay consistent.
+// Every message the agent sends lives here, so tone and wording stay consistent. The agent speaks as
+// Trippy 🚗, the mascot. It introduces itself by name in the welcome and the invitation, and otherwise
+// just says "I". Keep the car puns rare.
 
 export const STOP_ICONS: Record<StopKind, string> = {
   origin: "🏠",
@@ -43,7 +45,7 @@ const masked = (handle: string) =>
 
 export const copy = {
   welcome: () =>
-    "👋 Hi! I'm your Road Trip Agent — I plan group road trips right here in iMessage.\n\nText `newtrip` to start one (you'll be the host), or ask a friend to invite this number.",
+    "👋 Hi! I'm Trippy 🚗, your road-trip copilot. I plan group road trips right here in iMessage.\n\nText `newtrip` to start one (you'll be the host), or ask a friend to invite this number.",
   pendingInvite: (trip: Trip, hostName: string) =>
     `👋 ${hostName} invited you to plan “${trip.title}”. Reply \`join\` to hop in!`,
   noInvite: () =>
@@ -61,7 +63,7 @@ export const copy = {
   memberNext: (name: string) => `Thanks, ${name}! Reply \`ready\` when you're set to start planning.`,
   someoneJoined: (name: string, joined: number, total: number) => `👋 ${name} joined the trip (${joined}/${total} in).`,
   invitation: (hostName: string, trip: Trip) =>
-    `👋 ${hostName} invited you to plan a road trip: “${trip.title}”.\nReply \`join\` to accept.`,
+    `👋 ${hostName} invited you to plan a road trip: “${trip.title}”. I'm Trippy 🚗, and I'll do the planning legwork.\nReply \`join\` to accept.`,
   inviteReport: (sent: string[], failed: string[], already: string[]) =>
     [
       sent.length ? `✉️ Invited ${sent.map(masked).join(", ")}.` : "",
@@ -148,7 +150,7 @@ export const copy = {
   conflictAck: (summary: string) => `That clashes with what others asked for, so let's vote on it: ${summary}`,
   keepCurrent: (version: number) => `👌 The group chose to keep the current plan (v${version}).`,
   approvedAll: () =>
-    "🎉 Everyone approved! Here's your trip dashboard 👇\n\nOn the road, text me changes like “we're running 30 min late” or “sushi instead of pizza tomorrow” and I'll update everyone.",
+    "🎉 Everyone approved! Trippy's gassed up and ready to roll. Here's your trip dashboard 👇\n\nOn the road, text me changes like “we're running 30 min late” or “sushi instead of pizza tomorrow” and I'll update everyone.",
   onTheRoad: () => "You're on the road! 🚗 Text me any change and I'll update the plan for everyone.",
   noDashboardYet: () => "There's no itinerary yet — I'll send the dashboard once one exists.",
   dashboardUnavailable: () => "The dashboard link isn't set up yet (PUBLIC_BASE_URL is missing).",
@@ -158,7 +160,7 @@ export const copy = {
   askWhichStop: () => "Which stop should I change?",
   working: () => "On it… 🔎",
   couldNot: (reason: string) => `⚠️ I couldn't do that: ${reason}`,
-  oops: () => "😵 Something went wrong on my side. Try again in a moment.",
+  oops: () => "😵 I stalled out on my side. Try again in a moment.",
   tripCancelled: (trip: Trip) => `🛑 The host cancelled “${trip.title}”. Text \`newtrip\` to start a new one.`,
   tripAborted: (trip: Trip) =>
     `This trip ended${trip.abortReason ? ` (${trip.abortReason})` : ""}. Text \`newtrip\` to start a new one.`,

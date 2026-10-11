@@ -45,6 +45,18 @@
       (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c],
     );
 
+  /** A friendly status card with Trippy, for loading, empty and error states. */
+  const trippyNote = (html) =>
+    `<div class="trippy-note"><img src="/web/trippy.png" alt="" width="480" height="384"><p>${html}</p></div>`;
+
+  // Tap the logo and Trippy hops.
+  $("logo").addEventListener("click", (event) => {
+    const logo = event.currentTarget;
+    logo.classList.remove("hop");
+    void logo.offsetWidth; // restart the animation
+    logo.classList.add("hop");
+  });
+
   let map = null;
   let layer = null;
   let markers = new Map();
@@ -377,7 +389,8 @@
         .map((k) => `<span><span class="orb" style="--pin: var(--k-${k})">${ICONS[k]}</span>${LABELS[k]}</span>`)
         .join("")}</div>
       <p class="foot">${it?.droppedStops.length ? `Couldn't locate: ${esc(it.droppedStops.join(", "))}.<br>` : ""}
-        Map data © OpenStreetMap contributors · routing by OSRM${it ? ` · itinerary v${it.version}` : ""}</p>`;
+        Map data © OpenStreetMap contributors · routing by OSRM${it ? ` · itinerary v${it.version}` : ""}</p>
+      <div class="signoff"><img src="/web/trippy.png" alt="" width="480" height="384"><span>Planned with <b>Trippy</b>, your road-trip copilot</span></div>`;
   }
 
   function render(d) {
@@ -393,12 +406,14 @@
     badge.textContent = PHASES[d.phase] ?? d.phase;
     badge.classList.toggle("live", d.phase === "execution");
     $("bubble").innerHTML =
-      `<span class="b-car" aria-hidden="true">🚗</span><div class="b-text"><div class="b-title">${esc(
+      `<img class="b-car" src="/web/trippy.png" alt=""><div class="b-text"><div class="b-title">${esc(
         d.title,
       )}</div><div class="b-line">${it ? nextUpLine(it, currentIndex(it.stops)) : esc(PHASES[d.phase] ?? "")}</div></div>`;
 
     if (!it) {
-      const msg = `<p class="notice">${esc(PHASES[d.phase] ?? d.phase)} — the itinerary appears here once it's drafted.</p>`;
+      const msg = trippyNote(
+        `<b>${esc(PHASES[d.phase] ?? d.phase)}</b><br>Trippy will park the itinerary here once it's drafted.`,
+      );
       $("pane-schedule").innerHTML = msg;
       $("pane-impact").innerHTML = msg;
       renderTrip(d);
@@ -416,7 +431,9 @@
       const res = await fetch(`/api/trips/${encodeURIComponent(publicId)}`, { cache: "no-store" });
       if (res.status === 404) {
         $("title").textContent = "Trip not found";
-        $("pane-schedule").innerHTML = `<p class="notice">Open this dashboard from your trip's iMessage card.</p>`;
+        $("pane-schedule").innerHTML = trippyNote(
+          "Trippy can't find that trip.<br>Open this dashboard from your trip's iMessage card.",
+        );
         showTab("schedule");
         return;
       }
@@ -428,8 +445,9 @@
       render(data);
     } catch (error) {
       if (!lastSignature)
-        $("pane-schedule").innerHTML =
-          `<p class="notice">Couldn't load the trip (${esc(error.message)}). Retrying…</p>`;
+        $("pane-schedule").innerHTML = trippyNote(
+          `Trippy hit a pothole loading the trip (${esc(error.message)}).<br>Retrying…`,
+        );
     }
   }
 

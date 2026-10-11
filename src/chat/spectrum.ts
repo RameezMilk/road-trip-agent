@@ -4,6 +4,7 @@
  * recorded to `chat_events` here, because the agent's own sends never come back on the stream.
  */
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { app, type Message, type Space, Spectrum } from "spectrum-ts";
 import { imessage } from "spectrum-ts/providers/imessage";
 import type { Repo } from "../db/repo";
@@ -34,9 +35,14 @@ export interface InboundEvent {
 
 const CORE_KEYS = new Set(["id", "content", "direction", "platform", "sender", "space", "timestamp"]);
 
+/** Trippy card artwork (900×600 JPEG, which is what Photon's card image slot accepts). */
+const CARD_ART_PATH = new URL("../../web/trippy-card.jpg", import.meta.url);
+
 export class SpectrumChat implements ChatPort {
   private readonly spaces = new Map<string, Space>();
   private readonly seen = new Set<string>();
+  /** Loaded on first use; null once loading it, or sending a card with it, has failed. */
+  private cardArt: Uint8Array<ArrayBuffer> | null | undefined;
 
   private constructor(
     private readonly spectrum: Awaited<ReturnType<typeof Spectrum>>,
@@ -116,8 +122,39 @@ export class SpectrumChat implements ChatPort {
     await this.recordOutbound(to, sent, "text", text, {});
   }
 
+  /**
+   * Builds the provider layout. Card art is optional decoration: when a card with art fails but the same
+   * card without it succeeds, the art is switched off for the rest of the process.
+   */
+  private async withArt<T>(layout: CardLayout, run: (l: Record<string, unknown>) => Promise<T>): Promise<T> {
+    const plain = { caption: layout.caption, subcaption: layout.subcaption };
+    const image = layout.art ? this.loadCardArt() : null;
+    if (!layout.art || !image) return run(plain);
+    try {
+      return await run({ ...plain, image, imageTitle: layout.art.title, imageSubtitle: layout.art.subtitle });
+    } catch (error) {
+      if (isRecipientNotAllowed(error)) throw error;
+      const result = await run(plain); // if this fails too, the art wasn't the problem: rethrow that
+      this.cardArt = null;
+      this.log("card_art_disabled", { error: String(error) });
+      return result;
+    }
+  }
+
+  private loadCardArt(): Uint8Array<ArrayBuffer> | null {
+    if (this.cardArt === undefined) {
+      try {
+        this.cardArt = new Uint8Array(readFileSync(CARD_ART_PATH));
+      } catch (error) {
+        this.cardArt = null;
+        this.log("card_art_missing", { error: String(error) });
+      }
+    }
+    return this.cardArt;
+  }
+
   async sendCard(to: Recipient, url: string, layout: CardLayout): Promise<CardRef | null> {
-    const sent = await this.send(to, app(url, { live: this.cardLive, layout }));
+    const sent = await this.withArt(layout, (l) => this.send(to, app(url, { live: this.cardLive, layout: l })));
     await this.recordOutbound(to, sent, "app", null, { url, ...layout });
     const session = (sent as { miniAppCardSession?: Record<string, unknown> } | undefined)?.miniAppCardSession;
     return sent && session ? { messageId: sent.id, session: { ...session } } : null;
@@ -139,7 +176,9 @@ export class SpectrumChat implements ChatPort {
       timestamp: new Date(),
       miniAppCardSession: { ...card.session },
     };
-    await space.edit(target as unknown as Message, app(url, { live: this.cardLive, layout }));
+    await this.withArt(layout, (l) =>
+      space.edit(target as unknown as Message, app(url, { live: this.cardLive, layout: l })),
+    );
     await this.recordOutbound(to, undefined, "app_edit", null, { url, ...layout, editOf: card.messageId });
     return { messageId: card.messageId, session: { ...target.miniAppCardSession } };
   }

@@ -198,11 +198,12 @@ export class Engine {
   }
 
   cardLayout(trip: Trip, itinerary: Itinerary | null): CardLayout {
+    const title = itinerary?.title ?? trip.title;
+    const route = itinerary ? `${itinerary.startLocation} → ${itinerary.endLocation}` : null;
     return {
-      caption: `🚗 ${itinerary?.title ?? trip.title}`,
-      subcaption: itinerary
-        ? `${itinerary.startLocation} → ${itinerary.endLocation} · v${itinerary.version}`
-        : "Trip dashboard",
+      caption: `🚗 ${title}`,
+      subcaption: route ? `${route} · v${itinerary?.version}` : "Trip dashboard",
+      art: { title, subtitle: route ?? "Trip dashboard" },
     };
   }
 

@@ -77,9 +77,10 @@ Never move it to serverless or edge, because the stream must stay connected.
   - `/poll/:token` and `GET/POST /api/polls/:token` serve the poll widget.
   - `/web/*` serves static files.
 - **`web/`** is plain HTML/CSS/JS in Frutiger Aero style, with Leaflet 1.9.4 from cdnjs and OSM tiles:
-  - The dashboard has four touch-sized **tabs**: 🗺️ Map · 📋 Schedule · 🌱 Impact · 👥 Trip. Each fills the screen. Tapping a stop switches to Map and opens that stop's popup.
-  - The page never scrolls. Only the active tab scrolls, **vertically only** (`overflow-x: hidden`, `touch-action: pan-y`, `minmax(0,1fr)` grids).
+  - The dashboard has four touch-sized **tabs**: 🗺️ Map · 📋 Schedule · 🌱 Impact · 👥 Trip. Each fills the screen. Tapping a stop switches to Map and opens that stop's popup. The Map tab has a **Start** button (flies to stop 1 and opens its popup, whose link gives driving directions to stop 2) and a **Whole route** button.
+  - Map tab: the page is locked (`html.lock`). Schedule/Impact/Trip scroll the **document**, vertically only, under a sticky header + tab bar. iMessage's sheet claims every vertical swipe for drag-to-dismiss when the page itself can't scroll, which made inner scrolling panes hard to move. Keep `overflow-x: clip` (not `hidden`, which breaks `position: sticky`). Views under 420 px tall (an inline live card) stay locked and scroll inside the pane.
   - Under 120 px tall (an inline live bubble) it shows a one-line summary only.
+  - **Trippy** (`web/trippy.png`), a glossy red car, is the mascot and logo. It appears in the header, the loading, empty and error states, the Trip-tab sign-off, the poll page and the favicon. In messages the agent introduces itself as Trippy only in the welcome and invitation, then just says "I".
 
 ### Conversation flow (each member in their own DM)
 
@@ -91,6 +92,7 @@ Never move it to serverless or edge, because the stream must stay connected.
 2. **Planning:** each member answers the 7 predefined fields one by one.
    - Simple answers are parsed deterministically first, and Gemini `PredefinedExtraction` handles the rest.
    - Optional wishes come next, through `OptionalExtraction`. Then `ready`.
+   - **Photos** (`phases/photo.ts`): Gemini `ImageInterpretation` (image input plus Google Search) reads a screenshot of a post about a place and records the wish "Visit X, City". It reads a photo of a view and records "Include stops similar to: …". The wish text is built in code. A caption arrives as a separate message in either order; recent DM context plus `awaitingPhoto` keep it from being counted twice. In **review**, a photo becomes feedback ("Add a stop at …" / "Add stops similar to: …") for `FeedbackAssessment`. In other phases photos are declined. Image bytes are fetched from Photon only when used (`runtime.ts`, 7 MB cap) and are never stored.
 3. **Voting:**
    - Reconcile first: budget becomes the minimum and dietary restrictions are unioned.
    - Then route and dates polls run, only where members differ, one open poll at a time.
@@ -113,6 +115,8 @@ Never move it to serverless or edge, because the stream must stay connected.
 
 `help`, `status`, `dashboard` and `cancel` (host only) work in every phase.
 
+**Reminders** (`phases/reminders.ts`, swept every 5 s by `Engine.startReminders`): in onboarding, planning, voting and review, a joined member who owes a step and hasn't answered the agent's last message is nudged after 15 s, then ×4 (1, 4, 16, 64 min), at most 5 times. Each reminder names who is already waiting and for how long. All timing is read from the hypertables (`Repo.reminderState`): the last reply and the unanswered message come from `chat_events`, and reminders sent come from `trip_events` `reminder_sent` rows. A reply or a new phase resets the count.
+
 ## Rules that aren't obvious from the code
 
 - **Photon Spectrum (Pro plan), proved by the probe on `dev/initial-scratch`:**
@@ -123,6 +127,7 @@ Never move it to serverless or edge, because the stream must stay connected.
   - Skip `direction: "outbound"`. Our own sends don't come back on the stream, so `SpectrumChat` records them.
   - Card edits need the original send's `miniAppCardSession`, which the provider **replaces on every edit**. We store `{messageId, session}` on the member (`members.card`), rebuild a minimal outbound target to edit, and save the new session. If the edit fails, we send a new card.
   - Pass `layout` to `app()` so Photon doesn't fetch OG metadata through ngrok.
+  - Cards carry Trippy artwork (`web/trippy-card.jpg`) via the layout's `image` + `imageTitle`. Photon only accepts JPEG there. If a card with art fails and the same card without it succeeds, `SpectrumChat` turns the art off for the rest of the process (`card_art_disabled` in the log).
   - **Cards are sent non-live by default (`CARD_LIVE=false`).** A live card (`app(url,{live:true})`) renders the page *inline* in the thread at about reply-bubble size, and the first live test showed it was far too cramped. A non-live card is a normal bubble that should open the mini-app in iMessage's expanded, near-full-screen view when tapped.
   - Free ngrok domains show a "You are about to visit…" page to browsers first. Tap **Visit Site** once.
   - The mini-app webview ignores `target="_blank"` and doesn't open new windows. External links (Google Maps) use the `data-external` handler in `dashboard.js`, which navigates in place when no window opens. Don't add new-window links.
@@ -151,7 +156,7 @@ Never move it to serverless or edge, because the stream must stay connected.
 | # | Pitch said | MVP does | Why |
 |---|---|---|---|
 | 1 | Voting through a poll widget | Polls are numbered text replies in each DM ("reply 1/2/3 or tell me what you'd prefer"), plus a poll-widget card at `/poll/:token` | On Photon **Pro**, native iMessage poll votes never reach the agent (proved by the probe on `dev/initial-scratch`). Card pages carry no identity, so each member's widget link holds a random per-(poll, member) token sent only in their own DM. |
-| 2 | Google Maps or OpenStreetMap, whichever is free | OpenStreetMap: Leaflet tiles, Nominatim geocoding, OSRM routing. Google Maps appears only as a plain `maps/search` link. | OSM needs no billing account or key. Google Maps Platform requires billing. |
+| 2 | Google Maps or OpenStreetMap, whichever is free | OpenStreetMap: Leaflet tiles, Nominatim geocoding, OSRM routing. Google Maps appears only as plain `maps/search` and `maps/dir` (directions to the next stop) links. | OSM needs no billing account or key. Google Maps Platform requires billing. |
 | 3 | No backend API if the frontend reads the DB directly | One read-only `GET /api/trips/:publicId` (plus the poll-widget GET/POST) on the agent's own Hono server | Reading Postgres from the browser would expose the Tiger Data credentials. The Node process has to run anyway to keep the Spectrum stream open. |
 | 4 | Dashboard hosted on any free service | Served by the same Node process and exposed with `ngrok http 8787` (`PUBLIC_BASE_URL`) | Free hosts sleep and would cut the long-lived Spectrum stream. |
 | 5 | Streamlit or AI-generated HTML/CSS/JS | Plain HTML/CSS/JS in `web/`, with Leaflet from cdnjs | The card opens at about 280×300 inside Messages, so a light static page fits. Streamlit would need a Python server and websockets. |
@@ -162,7 +167,7 @@ Never move it to serverless or edge, because the stream must stay connected.
 | 10 | Changes are auto, proposed or voted depending on impact | During **execution** (on the road), changes apply immediately and everyone is notified. The three tiers apply during itinerary review. | Last-minute changes on the road can't wait for re-approval. |
 | 11 | Gas savings and carbon footprint | Computed in code from OSRM distance and `VEHICLE_MPG`/`GAS_PRICE_USD_PER_GALLON`, at 8.887 kg CO₂ per gallon (EPA). Carpooling savings are measured against each member driving solo. The dashboard labels all of these as assumptions. | Gemini never supplies distances, times, fuel or CO₂. |
 | 12 | (unspecified) | Each member's first name is captured when they join | Polls, status messages and the dashboard show first names, never phone numbers. |
-| 13 | (unspecified) | Text messages only. Voice, images and attachments get a "text only for now" reply. | Keeps the MVP small. Voice notes would need to be transcoded first. |
+| 13 | (unspecified) | Text, plus **photos during planning and review**: a screenshot of a place becomes a "visit" wish, and a photo of a view becomes a "stops similar to" wish or feedback. Voice notes and other attachments get a "text only for now" reply. | People share places as screenshots and pictures, which Gemini can read directly. Voice notes would need to be transcoded first (iMessage records them as CAF). |
 | 14 | (unspecified) | Planning starts once at least `MIN_MEMBERS` (default 2) people have joined | Stops a host's early `ready` from launching a solo trip. Set it to 1 for solo testing. |
 | 15 | Dashboard only after everyone approves | The card is sent to everyone on full approval, as specified, but `dashboard` also works during review as a preview | Lets the group see the map while they decide, without changing the approval flow. |
 | 16 | Requirements gathered by the "Planning Phase" | Mid-planning corrections ("actually change my budget to 300") are re-extracted and re-validated | People change their minds, and the predefined schema stays authoritative. |

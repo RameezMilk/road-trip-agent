@@ -7,12 +7,18 @@
     <title>Trip vote</title>
     <meta property="og:title" content="Trip vote">
     <meta property="og:description" content="Tap to vote on your road trip">
+    <link rel="icon" type="image/png" href="/web/trippy-icon.png">
+    <link rel="apple-touch-icon" href="/web/apple-touch-icon.png">
     <link rel="stylesheet" href="/web/styles.css">
   </head>
   <body>
     <div class="bubbles" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
     <div class="app">
       <form class="poll glass" id="form">
+        <div class="poll-head">
+          <img class="logo" src="/web/trippy.png" alt="Trippy" width="480" height="384">
+          <span>Group vote</span>
+        </div>
         <h1 id="question">Loading vote…</h1>
         <div id="options" role="radiogroup" aria-labelledby="question"></div>
         <label for="other" class="status">Or say it in your own words:</label>

@@ -5,6 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
     <meta name="theme-color" content="#7cc8ef">
     <!--OG-->
+    <link rel="icon" type="image/png" href="/web/trippy-icon.png">
+    <link rel="apple-touch-icon" href="/web/apple-touch-icon.png">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
     <link rel="stylesheet" href="/web/styles.css">
   </head>
@@ -14,6 +16,7 @@
       <div class="bubble-only glass" id="bubble"></div>
       <div class="top">
         <header class="header glass">
+          <img class="logo" id="logo" src="/web/trippy.png" alt="Trippy, your road-trip copilot" width="480" height="384">
           <div class="titles">
             <h1 id="title">Loading trip…</h1>
             <p class="sub" id="subtitle"></p>
@@ -45,7 +48,10 @@
           </div>
         </section>
         <section class="pane scroll" id="pane-schedule" role="tabpanel" aria-labelledby="tab-schedule">
-          <p class="notice">Loading…</p>
+          <div class="trippy-note loading">
+            <img src="/web/trippy.png" alt="" width="480" height="384">
+            <p>Trippy is fetching your trip…</p>
+          </div>
         </section>
         <section class="pane scroll" id="pane-impact" role="tabpanel" aria-labelledby="tab-impact"></section>
         <section class="pane scroll" id="pane-trip" role="tabpanel" aria-labelledby="tab-trip"></section>

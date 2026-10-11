@@ -111,6 +111,6 @@ export function createHttpApp(deps: { repo: Repo; engine: Engine | null }) {
     serveStatic({ root: relative(process.cwd(), WEB_DIR) || ".", rewriteRequestPath: (p) => p.replace(/^\/web/, "") }),
   );
 
-  app.get("/", (c) => c.text("Road Trip Agent is running. Open a trip dashboard from its iMessage card."));
+  app.get("/", (c) => c.text("Trippy (road-trip agent) is running. Open a trip dashboard from its iMessage card."));
   return app;
 }

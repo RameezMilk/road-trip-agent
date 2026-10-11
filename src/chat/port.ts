@@ -12,6 +12,8 @@ export interface Recipient {
 export interface CardLayout {
   caption: string;
   subcaption: string;
+  /** Show the Trippy mascot artwork on the card, with this text overlaid. Adapters may ignore it. */
+  art?: { title: string; subtitle?: string };
 }
 
 /** The only way the engine talks to iMessage. Implemented by Spectrum in production and a fake in tests. */

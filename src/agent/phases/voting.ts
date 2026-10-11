@@ -168,7 +168,11 @@ export async function sendPoll(e: Engine, poll: Poll, revote: boolean): Promise<
     const url = e.pollUrl(await e.repo.pollToken(poll.id, m.id));
     if (!url) continue;
     try {
-      await e.chat.sendCard(e.recipient(m), url, { caption: `🗳️ ${poll.question}`, subcaption: "Tap to vote" });
+      await e.chat.sendCard(e.recipient(m), url, {
+        caption: `🗳️ ${poll.question}`,
+        subcaption: "Tap to vote",
+        art: { title: "🗳️ Group vote", subtitle: "Tap to vote" },
+      });
     } catch (error) {
       e.log("poll_card_failed", { pollId: poll.id, error: String(error) });
     }
