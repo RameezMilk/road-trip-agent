@@ -236,7 +236,7 @@ async function extractWithGemini(
   const today = e.todayIn(ctx.trip.timeZone);
   let found: Partial<PredefinedRequirements> | null = asked ? parseFieldDeterministic(asked, ctx.msg.text) : null;
   if (!found) {
-    await e.typing(e.recipient(ctx.member));
+    e.typing(e.recipient(ctx.member));
     try {
       const out = await e.llm.generate({
         task: "predefined_extraction",
@@ -354,7 +354,7 @@ async function classifyWish(
     const category = OptionalCategory.safeParse(decided.value);
     return [{ category: category.success ? category.data : "other", text: text.slice(0, 200) }];
   }
-  await e.typing(e.recipient(ctx.member));
+  e.typing(e.recipient(ctx.member));
   try {
     const out = await e.llm.generate({
       task: "optional_extraction",

@@ -25,8 +25,8 @@ export async function startDrafting(
 ): Promise<void> {
   if (!(await e.repo.transition(tripId, from, "drafting"))) return;
   await e.broadcast(tripId, copy.drafting(revision !== null));
-  for (const m of await e.joinedMembers(tripId)) await e.typing(e.recipient(m));
   e.startDraftJob(tripId, revision);
+  for (const m of await e.joinedMembers(tripId)) e.typing(e.recipient(m));
 }
 
 export async function draftItinerary(e: Engine, tripId: string, revision: Revision | null): Promise<Itinerary> {

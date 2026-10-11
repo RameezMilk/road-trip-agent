@@ -187,11 +187,13 @@ export class Engine {
     }
   }
 
-  /** Typing dots before slow work (Gemini, drafting). Awaited so they can't land after the reply; capped at 1.5 s. */
-  async typing(to: Recipient): Promise<void> {
-    if (!this.chat.typing) return;
-    const timeout = new Promise<void>((resolve) => setTimeout(resolve, 1500));
-    await Promise.race([this.chat.typing(to).catch(() => undefined), timeout]);
+  /**
+   * Typing dots before slow work (Gemini, drafting). Fire-and-forget: Photon's startTyping can take 1.5 s+,
+   * which delayed every reply it preceded; every call site is followed by 2 s+ of work, so the dots still
+   * land before the reply.
+   */
+  typing(to: Recipient): void {
+    this.chat.typing?.(to).catch(() => undefined);
   }
 
   /** Sends a file (the send-off GIF); failures are logged, never thrown. */
@@ -213,9 +215,9 @@ export class Engine {
   }
 
   async broadcast(tripId: string, text: string, exceptMemberId?: string): Promise<void> {
-    for (const m of await this.joinedMembers(tripId)) {
-      if (m.id !== exceptMemberId) await this.sendTo(this.recipient(m), text);
-    }
+    // Everyone at once: each send is a ~0.7 s round trip, and each member's own order is unchanged.
+    const members = (await this.joinedMembers(tripId)).filter((m) => m.id !== exceptMemberId);
+    await Promise.all(members.map((m) => this.sendTo(this.recipient(m), text)));
   }
 
   displayName(member: Member): string {

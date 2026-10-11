@@ -227,17 +227,20 @@ function dedupeAdopted(items: ResolvedRequirements["adopted"]): ResolvedRequirem
 
 export async function sendPoll(e: Engine, poll: Poll, revote: boolean): Promise<void> {
   const text = copy.pollText(poll, revote);
-  for (const m of await e.joinedMembers(poll.tripId)) {
-    await e.sendTo(e.recipient(m), text);
-    if (!e.config.pollWidget) continue; // votes are iMessage replies; the widget stays available
-    const url = e.pollUrl(await e.repo.pollToken(poll.id, m.id));
-    if (!url) continue;
-    try {
-      await e.chat.sendCard(e.recipient(m), url, { caption: `🗳️ ${poll.question}`, subcaption: "Tap to vote" });
-    } catch (error) {
-      e.log("poll_card_failed", { pollId: poll.id, error: String(error) });
-    }
-  }
+  const members = await e.joinedMembers(poll.tripId);
+  await Promise.all(
+    members.map(async (m) => {
+      await e.sendTo(e.recipient(m), text);
+      if (!e.config.pollWidget) return; // votes are iMessage replies; the widget stays available
+      const url = e.pollUrl(await e.repo.pollToken(poll.id, m.id));
+      if (!url) return;
+      try {
+        await e.chat.sendCard(e.recipient(m), url, { caption: `🗳️ ${poll.question}`, subcaption: "Tap to vote" });
+      } catch (error) {
+        e.log("poll_card_failed", { pollId: poll.id, error: String(error) });
+      }
+    }),
+  );
 }
 
 async function openPoll(e: Engine, tripId: string): Promise<Poll | null> {
@@ -282,7 +285,7 @@ async function mapToOption(e: Engine, poll: Poll, text: string, voter?: Recipien
   });
   if (decided && decided.confidence >= 0.5) return decided.value === NO_OPTION ? null : decided.value;
   const ids = poll.options.map((o) => o.id) as [string, ...string[]];
-  if (voter) await e.typing(voter);
+  if (voter) e.typing(voter);
   try {
     const out = await e.llm.generate({
       task: "vote_mapping",

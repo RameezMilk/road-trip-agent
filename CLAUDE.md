@@ -94,7 +94,7 @@ Never move it to serverless or edge, because the stream must stay connected.
    - Friends send `join CODE`, or `join` after an `invite +1…`, then their name.
    - After the name, each person goes straight into the questions, and the host hears "👋 Sam joined!".
 2. **Planning:** 3 grouped questions cover the 7 must-haves:
-   - 📍 route: start, end, and round trip unless they say "one way";
+   - 📍 route: start, end, and round trip unless they say "one way". A lone place ("Wilmington") is read as the destination, and the follow-up asks only for the missing end. "one way" on its own is never read as a place;
    - 📅 dates: one message, e.g. "Oct 18–19";
    - 💵🥗 budget plus diet: "$300, halal".
 
