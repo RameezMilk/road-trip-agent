@@ -5,6 +5,8 @@ This file carries forward the two capabilities we built and tested on 2026-10-10
 1. **Photon setup:** connecting an agent to iMessage through Photon Spectrum and getting it working.
 2. **Message capture:** saving every message's content and metadata from a user ↔ agent private iMessage chat, live into Tiger Data and as a full-history backfill.
 
+Open UX concerns for the mini-app dashboard are listed at the end, under **Concerns to keep in mind and address**.
+
 Each claim is marked with how sure we are:
 - ✅ **Verified:** run on real phones, Photon, or an actual database during the session.
 - 🧪 **Tested locally:** unit and integration tests passed, but it hasn't run against the real service yet.
@@ -632,3 +634,63 @@ const db = pg as unknown as Db;
 - Operational logs must never contain raw phone numbers. Use `sha256(handle).slice(0, 8) + "…" + last4`.
 - Raw private messages can inform the agent's private replies to *that* user, but group-level logic should only read shareable data (votes, confirmed constraints, aggregates).
 - Consider a retention period, such as dropping raw text after the trip ends.
+
+---
+
+# Concerns to keep in mind and address
+
+## C1. Showing a dashboard inside iMessage (no leaving the app)
+
+**Answer: yes.** A web page can open as a mini app inside a private chat with the agent. ✅ Verified on 2026-10-10:
+- The agent sent `app(url, { live: true })`, the user tapped it, and the page loaded **inside Messages** through Photon's Spectrum launcher. The page's user agent included `Spectrum/1.3.3 (Build 36)`.
+- JavaScript ran and the page called our server (`fetch`), so a dashboard can load fresh data and refresh while it's open.
+- `edit(app(newUrl, { live: true }), sentCard)` reloaded the **same bubble** with the new page. As the conversation changes the trip, the agent updates the dashboard card in place instead of sending new messages.
+
+**Requirements and caveats:**
+- **Launcher:** every iPhone installs the Spectrum iMessage App once (https://apps.apple.com/app/id6777616651). 📄 Without it, the card falls back to a plain link preview that opens Safari.
+- **Public HTTPS URL:** ngrok during development, a real domain later. The card's caption and image come from the page's Open Graph tags (`og:title`, `og:description`, `og:image`).
+- **The space is small.** ✅ Measured viewports were **163×57 points in the bubble** and **280×300 points when opened**. Design a compact summary first (see C2).
+- **No viewer identity.** ✅ The page receives no Photon identity, headers or tokens. In a private chat, a card sent only to one person can carry a signed per-person link. Use `/confirm CODE` (Feature 1.5) for anything sensitive.
+- ⚠️ **Google Maps inside the card is untested.** Test it before building the map view. The fallback is a static map image on the page.
+
+**Fallbacks without the launcher (or alongside the card):**
+1. **Dashboard as an image (best fallback).** The server renders a picture of the dashboard and sends it as a photo, which opens full-screen and zoomable inside Messages. 📄 Sending attachments is supported by the SDK. ⚠️ Untested on Pro. Each update is a new image.
+2. **Link preview with an image.** Send the URL with the dashboard image as its `og:image`, so the preview bubble itself is the summary. Tapping it leaves for Safari.
+3. **PDF itinerary.** An attachment opens in Messages' built-in viewer. Good for a final printable plan.
+4. **One text "status" message the agent keeps editing.** It works everywhere. ⚠️ Unverified, but as we understand it Apple limits edits to regular messages (around 5 edits within 15 minutes), so it's only good for short-lived updates.
+5. **Our own iMessage app extension** (`customizedMiniApp` in the SDK). It gives full control, but means building and distributing an iOS app extension. Too heavy for the hackathon.
+
+**Recommendation:** use the live card as the dashboard, plus a dashboard image for anyone without the launcher.
+
+## C2. Live card scrolling fights the conversation
+
+**Observed** (✅ reported by the owner, 2026-10-10): scrolling or navigating inside the live card also scrolled the conversation history. The experience was poor.
+
+**Why:** the card is a tiny web page embedded in a scrolling conversation. When the page itself can scroll, iOS can't tell which one the swipe is for, so both move, or the scroll continues past the page's edge into the conversation. The probe page was built like a regular website, which causes exactly this. Apple's design for in-conversation cards is "glance and tap," not "scroll."
+
+**Fixes (all on the web page except 5):**
+
+1. **The bubble shows a summary, with no scrolling.** When the page detects it's in the bubble (≈163×57 points), render a fixed summary that fits exactly, for example **"Plan v2 · 3 stops · ETA 6:40pm · Tap to open"**. Lock scrolling, so a swipe over the card simply scrolls the conversation and a tap opens it. Choose the layout from the viewport sizes we measured:
+   ```js
+   const mode = innerHeight < 120 ? "bubble" : innerHeight < 420 ? "compact" : "expanded";
+   addEventListener("resize", () => {/* recompute mode and re-render */});
+   ```
+2. **The opened view behaves like an app, not a website.** A fixed header and tabs, with **one inner panel** that scrolls and stops at its own edges instead of carrying on into the conversation:
+   ```css
+   html, body { height: 100%; margin: 0; overflow: hidden; overscroll-behavior: none; }
+   .panel     { height: 100%; overflow-y: auto; overscroll-behavior: contain; }
+   ```
+   The page never scrolls as a whole and never bounces; only the panel moves.
+3. **No swipe-based controls.** Sideways swipes already do other things in iMessage (revealing timestamps, going back). No carousels and no swipe-to-vote. Use buttons and tabs with tap targets of at least 44 points.
+4. **Stop the map from grabbing gestures.**
+   - In the bubble: a static map image.
+   - In the opened view: Google Maps `gestureHandling: "cooperative"`, so one finger scrolls the panel and two fingers move the map. Or give the map its own full-view "Map" tab.
+5. **Use the bigger view if the launcher allows it.** iMessage apps normally have a **compact** presentation (keyboard height) and an **expanded** one (nearly full screen). The 280×300 points we measured looks like compact.
+   - ⚠️ Untested: whether Photon's launcher lets the user expand it, for example by dragging the top edge up.
+   - If it does, the full dashboard belongs in the expanded view. If not, ask Photon (ryan@photon.codes).
+   - Our own iMessage extension (C1, fallback 5) would give full control, but it's heavy.
+
+**How to verify (not built yet):** a **card test page** served by the agent that:
+- switches layouts automatically (bubble / compact / expanded)
+- reports every viewport change to the server, so we learn the real sizes and whether an expanded view exists
+- includes a long list and a map, to confirm on a real iPhone that the scroll conflict is gone
