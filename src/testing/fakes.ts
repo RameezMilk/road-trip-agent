@@ -13,7 +13,7 @@ type Handler = (request: LlmRequest<unknown>) => unknown;
 
 /** Scripted LLM: each task has a queue of canned answers (or a function). Output still goes through the schema. */
 export class FakeLlm implements Llm {
-  readonly calls: Array<{ task: LlmTask; prompt: string }> = [];
+  readonly calls: Array<{ task: LlmTask; prompt: string; images: number }> = [];
   private readonly scripts = new Map<LlmTask, Array<unknown | Handler>>();
 
   on(task: LlmTask, ...answers: Array<unknown | Handler>): this {
@@ -21,8 +21,14 @@ export class FakeLlm implements Llm {
     return this;
   }
 
+  /** Replaces whatever is still scripted for `task`. */
+  set(task: LlmTask, ...answers: Array<unknown | Handler>): this {
+    this.scripts.set(task, answers);
+    return this;
+  }
+
   async generate<T>(request: LlmRequest<T>): Promise<T> {
-    this.calls.push({ task: request.task, prompt: request.prompt });
+    this.calls.push({ task: request.task, prompt: request.prompt, images: request.images?.length ?? 0 });
     const queue = this.scripts.get(request.task) ?? [];
     const next = queue.length > 1 ? queue.shift() : queue[0];
     if (next === undefined) throw new LlmError(request.task, "no scripted answer");

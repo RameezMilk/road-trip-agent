@@ -1,8 +1,14 @@
-import type { InboundEvent } from "../chat/spectrum";
+import type { InboundEvent, InboundImage } from "../chat/spectrum";
 import type { Repo } from "../db/repo";
 import { copy } from "./copy";
 import type { Engine, Log } from "./engine";
 import { KeyedQueue } from "./keyed-queue";
+
+/** Phases where a photo means something (a wish while planning, feedback while reviewing). */
+const PHOTO_PHASES = new Set(["planning", "review"]);
+/** Inline image limit for Gemini requests, with headroom for base64 and the prompt. */
+const MAX_IMAGE_BYTES = 7 * 1024 * 1024;
+const IMAGE_READ_TIMEOUT_MS = 20_000;
 
 /**
  * Pumps the chat stream into the engine:
@@ -32,8 +38,33 @@ export async function runChatLoop(deps: {
     if (!fresh || ev.isGroup) continue;
 
     const to = { handle, chatId: ev.chatId, memberId: active?.member.id ?? null, tripId: active?.trip.id ?? null };
+    if (ev.image && active && PHOTO_PHASES.has(active.trip.phase)) {
+      const image = ev.image;
+      const work = perSender
+        .run(handle, async () => {
+          const data = await readImage(image).catch((error) => {
+            log("photo_read_failed", { error: String(error), mimeType: image.mimeType });
+            return null;
+          });
+          if (!data) return void (await engine.sendTo(to, copy.photoUnreadable()));
+          log("photo_read", { mimeType: image.mimeType, bytes: data.length });
+          await engine.receive({
+            messageId: ev.messageId,
+            handle,
+            chatId: ev.chatId,
+            text: "",
+            receivedAt: ev.occurredAt,
+            image: { mimeType: image.mimeType, data },
+          });
+        })
+        .catch((error) => {
+          log("receive_failed", { error: String(error) });
+        });
+      engine.track(work);
+      continue;
+    }
     if (ev.kind === "attachment" || ev.kind === "voice") {
-      void engine.sendTo(to, copy.textOnly());
+      void engine.sendTo(to, ev.image ? copy.photoNotNow() : copy.textOnly());
       continue;
     }
     if (ev.kind !== "text" || !ev.text?.trim()) continue;
@@ -45,5 +76,20 @@ export async function runChatLoop(deps: {
         log("receive_failed", { error: String(error) });
       });
     engine.track(work);
+  }
+}
+
+async function readImage(image: InboundImage): Promise<Buffer> {
+  if (image.size !== null && image.size > MAX_IMAGE_BYTES) throw new Error(`too large (${image.size} bytes)`);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error("read timed out")), IMAGE_READ_TIMEOUT_MS);
+  });
+  try {
+    const data = await Promise.race([image.read(), timeout]);
+    if (data.length > MAX_IMAGE_BYTES) throw new Error(`too large (${data.length} bytes)`);
+    return data;
+  } finally {
+    clearTimeout(timer);
   }
 }

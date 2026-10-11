@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isNoWish, parseBudgetDiet, parseRoute, parseTripType, placeName, tidyPlace } from "./answers";
+import { isNoWish, parseBudgetDiet, parseRoute, parseTripType, placeName, refersToPhoto, tidyPlace } from "./answers";
 
 describe("tidyPlace", () => {
   it("title-cases and formats a trailing state code", () => {
@@ -117,5 +117,14 @@ describe("placeName", () => {
       "I want Boone",
     ])
       expect(placeName(text)).toBeNull();
+  });
+});
+
+describe("refersToPhoto", () => {
+  it("spots captions that point at a photo", () => {
+    for (const text of ["include stops similar to this", "this place!", "something like these", "that one", "this 👀"])
+      expect(refersToPhoto(text)).toBe(true);
+    for (const text of ["beach day", "nope", "a waterfall hike", "like this trip a lot", "seafood"])
+      expect(refersToPhoto(text)).toBe(false);
   });
 });

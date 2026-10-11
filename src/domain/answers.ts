@@ -140,3 +140,16 @@ export function isNoWish(input: string): boolean {
     input.trim(),
   );
 }
+
+/**
+ * A caption that points at a photo instead of saying the wish ("similar to this", "this place!", "like
+ * these"). iMessage sends a photo and its caption as separate messages, in either order.
+ */
+export function refersToPhoto(input: string): boolean {
+  const text = input.trim().toLowerCase();
+  return (
+    /\b(?:like|similar to|such as|more of)\s+(?:this|these|that|those)\b(?!\s+(?:trip|time|budget|date))/.test(text) ||
+    /\b(?:this|that)\s+(?:one|place|spot|pic|picture|photo|post|view)\b/.test(text) ||
+    /^(?:this|that|these|here|look|see)(?:\s|[!.]|👀|👆|⬆️)*$/u.test(text)
+  );
+}

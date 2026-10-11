@@ -11,6 +11,7 @@ export const LlmTask = z.enum([
   "live_update",
   "replacement_stop",
   "place_canonicalization",
+  "image_interpretation",
 ]);
 export type LlmTask = z.infer<typeof LlmTask>;
 
@@ -28,6 +29,7 @@ export const DEFAULT_EFFORT: Record<LlmTask, LlmEffort> = {
   feedback_assessment: "low",
   live_update: "low",
   replacement_stop: "low",
+  image_interpretation: "low", // reads a photo and places it with Google Search
 };
 
 export interface LlmRequest<T> {
@@ -39,6 +41,13 @@ export interface LlmRequest<T> {
   webSearch?: boolean;
   /** Overrides DEFAULT_EFFORT[task]. */
   effort?: LlmEffort;
+  /** Images the member sent, sent to Gemini alongside the prompt (never stored). */
+  images?: LlmImage[];
+}
+
+export interface LlmImage {
+  mimeType: string;
+  base64: string;
 }
 
 /** Structured generation: the result has already passed `schema` (LLM output is untrusted). */

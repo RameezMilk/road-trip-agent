@@ -38,6 +38,11 @@ const envSchema = z.object({
     z.enum(["true", "false"]).transform((v) => v === "true"),
     "false",
   ),
+  /** Nudge members the trip is waiting on (15 s after an unanswered message, then 1, 4, 16, 64 min). */
+  REMINDERS: withDefault(
+    z.enum(["true", "false"]).transform((v) => v === "true"),
+    "true",
+  ),
   /** Max planned stops per itinerary. Fewer = faster drafts (the demo uses 6). */
   MAX_STOPS: withDefault(z.coerce.number().int().min(3).max(15), 12),
   /** `false`: the first itinerary goes straight to the road (no approve round). `true`: everyone approves first. */

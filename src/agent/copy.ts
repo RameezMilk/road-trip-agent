@@ -62,6 +62,22 @@ const SEND_OFF: Record<Vibe, { emoji: string; line: string }> = {
   other: { emoji: "🚗", line: "Enjoy the ride — and queue up a good playlist 🎶" },
 };
 
+/** How long someone has waited, for reminders: "40 sec", "4 min", "1 hr 5 min". */
+export function formatWaited(ms: number): string {
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  if (seconds < 60) return `${seconds} sec`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} min`;
+  const rest = minutes % 60;
+  return `${Math.floor(minutes / 60)} hr${rest ? ` ${rest} min` : ""}`;
+}
+
+/** "A", "A and B", "A, B and C". */
+export function nameList(names: string[]): string {
+  if (names.length <= 1) return names.join("");
+  return `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+}
+
 const masked = (handle: string) =>
   handle.includes("@") ? handle.replace(/^(.).*(@.*)$/, "$1…$2") : `…${handle.slice(-4)}`;
 
@@ -198,4 +214,21 @@ export const copy = {
   tripAborted: (trip: Trip) =>
     `This trip ended${trip.abortReason ? ` (${trip.abortReason})` : ""}. Text \`newtrip\` to start a new one.`,
   textOnly: () => "I can only read text for now — mind typing that out?",
+  photoLooking: () => "📸 Got it — taking a look…",
+  photoWish: (description: string, wish: string) => `📸 ${description}. Added to your wishes: “${wish}”.`,
+  photoScene: (description: string, wish: string) =>
+    `📸 ${description}. I'll look for stops like that — added to your wishes: “${wish}”.`,
+  photoSeen: (description: string) => `📸 ${description}.`,
+  photoUnclear: () =>
+    "📸 I couldn't spot a place or a kind of stop in that picture. Send a screenshot of the post, or a photo of the kind of spot you'd like.",
+  photoNotNow: () =>
+    "📸 I can use photos while we're planning or reviewing the itinerary — for now, mind typing it out?",
+  photoUnreadable: () => "📸 I couldn't open that picture. Mind sending it again?",
+  sendThePhoto: () => "📸 Send the picture and I'll work it in.",
+  reminder: (name: string | null, waiting: Array<{ name: string; waitedMs: number }>, ask: string) => {
+    const head = waiting.length
+      ? `⏰ Hey${name ? ` ${name}` : ""} — ${nameList(waiting.map((w) => w.name))} ${waiting.length === 1 ? "is" : "are"} waiting on you to respond (${waiting.map((w) => `${w.name} for ${formatWaited(w.waitedMs)}`).join(", ")}).`
+      : `⏰ Hey${name ? ` ${name}` : ""} — the trip is waiting on your reply.`;
+    return `${head}\n${ask}`;
+  },
 };

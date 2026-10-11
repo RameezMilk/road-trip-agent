@@ -1,12 +1,41 @@
-/** `npm run llm:smoke` — structured, grounded and draft Gemini calls with timings (checks key, model, latency). */
+/**
+ * `npm run llm:smoke` — structured, grounded and draft Gemini calls with timings (checks key, model, latency).
+ * `npm run llm:smoke -- --image <path>` — instead reads one photo/screenshot the way the agent does.
+ */
+import { readFile } from "node:fs/promises";
+import { extname } from "node:path";
 import { loadConfig, requireConfig } from "../config";
-import { ItineraryDraft, OptionalExtraction, PredefinedExtraction, ReplacementStop } from "../schemas";
+import {
+  ImageInterpretation,
+  ItineraryDraft,
+  OptionalExtraction,
+  PredefinedExtraction,
+  ReplacementStop,
+} from "../schemas";
 import { GeminiLlm } from "../services/gemini";
 import { SYSTEM } from "../services/prompts";
 
 const config = requireConfig(loadConfig(), "Gemini", ["GEMINI_API_KEY"]);
 const llm = new GeminiLlm(config.GEMINI_API_KEY, config.GEMINI_MODEL, (event, data) => console.log(event, data ?? ""));
 console.log(`model: ${config.GEMINI_MODEL}`);
+
+const imageArg = process.argv.indexOf("--image");
+if (imageArg >= 0) {
+  const path = process.argv[imageArg + 1];
+  if (!path) throw new Error("usage: npm run llm:smoke -- --image <path>");
+  const ext = extname(path).slice(1).toLowerCase();
+  const mimeType = `image/${ext === "jpg" ? "jpeg" : ext}`;
+  const image = await llm.generate({
+    task: "image_interpretation",
+    system: SYSTEM.imageInterpretation,
+    prompt: "Trip: Chapel Hill, NC → Asheville, NC\nThe member just sent the attached image.",
+    schema: ImageInterpretation,
+    webSearch: true,
+    images: [{ mimeType, base64: (await readFile(path)).toString("base64") }],
+  });
+  console.log("image:", image);
+  process.exit(0);
+}
 
 async function timed<T>(label: string, run: () => Promise<T>): Promise<T> {
   const started = Date.now();

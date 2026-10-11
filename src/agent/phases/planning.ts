@@ -1,4 +1,4 @@
-import { isNoWish, parseBudgetDiet, parseRoute, parseTripType, placeName } from "../../domain/answers";
+import { isNoWish, parseBudgetDiet, parseRoute, parseTripType, placeName, refersToPhoto } from "../../domain/answers";
 import { parseDateRange } from "../../domain/dates";
 import { datesLabel, isComplete, missingFields } from "../../domain/reconcile";
 import {
@@ -14,10 +14,12 @@ import {
   RequirementText,
   Usd,
 } from "../../schemas";
+import { LlmError } from "../../services/llm";
 import { SYSTEM } from "../../services/prompts";
 import { copy, FIELD_LABELS, type PlanningStep } from "../copy";
 import type { Ctx, Engine } from "../engine";
 import { invite } from "./onboarding";
+import { interpretPhoto } from "./photo";
 import { begin as beginVoting } from "./voting";
 
 /**
@@ -87,6 +89,9 @@ export async function handle(e: Engine, ctx: Ctx): Promise<void> {
   if (ctx.command?.name === "ready") return ready(e, ctx);
   if (ctx.command?.name === "invite") return invite(e, ctx, ctx.command.handles);
   if (ctx.command) return void (await e.reply(ctx, copy.stillCollecting()));
+  // A caption that arrived before its photo ("similar to this"): wait for the picture, so it isn't read
+  // as a place or saved as a wish. (After the photo, `Engine.receive` drops it.)
+  if (refersToPhoto(ctx.msg.text)) return void (await e.reply(ctx, copy.sendThePhoto()));
 
   const reqs = await e.repo.getPredefined(ctx.member.id);
   const isHost = ctx.member.role === "host";
@@ -413,6 +418,43 @@ async function classifyWish(
     e.log("optional_extraction_failed", { error: String(error) });
     return [{ category: "other", text: text.slice(0, 200) }];
   }
+}
+
+/**
+ * A photo while planning: a post about a place becomes "Visit X", a view becomes "stops similar to …".
+ * Mid-questions it's saved and the next question follows; as the answer to "✨ Anything else?" it
+ * finishes the member, like a text wish.
+ */
+export async function capturePhoto(e: Engine, ctx: Ctx): Promise<void> {
+  await e.reply(ctx, copy.photoLooking());
+  const reqs = await e.repo.getPredefined(ctx.member.id);
+  const isHost = ctx.member.role === "host";
+  const trip = `${reqs.startLocation ?? "start not set yet"} → ${reqs.endLocation ?? "destination not set yet"}`;
+  let reading: Awaited<ReturnType<typeof interpretPhoto>>;
+  try {
+    reading = await interpretPhoto(e, ctx, trip);
+  } catch (error) {
+    if (!(error instanceof LlmError)) throw error;
+    e.log("image_interpretation_failed", { error: String(error) });
+    return void (await e.reply(ctx, copy.couldNot("I couldn't read that picture right now")));
+  }
+  const { interpretation: it, wish } = reading;
+  if (!wish) return void (await e.reply(ctx, copy.photoUnclear()));
+
+  await e.repo.addOptional({
+    id: newId("req"),
+    tripId: ctx.trip.id,
+    memberId: ctx.member.id,
+    category: it.category,
+    text: wish,
+    sourceEventId: ctx.msg.messageId,
+  });
+  const description = it.description.trim().replace(/[.\s]+$/, "");
+  const noted = it.kind === "place" ? copy.photoWish(description, wish) : copy.photoScene(description, wish);
+  const next = nextQuestion(reqs, isHost);
+  if (next) return void (await e.reply(ctx, `${noted}\n${next}`));
+  await e.reply(ctx, noted);
+  if (!ctx.member.requirementsReady) await finish(e, ctx);
 }
 
 async function ready(e: Engine, ctx: Ctx): Promise<void> {

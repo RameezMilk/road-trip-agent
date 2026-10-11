@@ -24,6 +24,8 @@ export type PredefinedExtraction = z.infer<typeof PredefinedExtraction>;
 
 export const OptionalExtraction = z.strictObject({
   requirements: z.array(z.strictObject({ category: OptionalCategory, text: z.string() })).max(5),
+  /** The message refers to a photo that hasn't been sent yet ("similar to this" before the picture). */
+  awaitingPhoto: z.boolean().default(false),
 });
 export type OptionalExtraction = z.infer<typeof OptionalExtraction>;
 
@@ -113,6 +115,8 @@ export const FeedbackAssessment = z.strictObject({
   /** Only when impact is conflicting. */
   pollQuestion: z.string().nullable(),
   pollOptions: z.array(z.strictObject({ label: z.string(), instruction: z.string() })).max(3),
+  /** The feedback refers to a photo that hasn't been sent yet; wait for it instead of replanning. */
+  awaitingPhoto: z.boolean().default(false),
 });
 export type FeedbackAssessment = z.infer<typeof FeedbackAssessment>;
 
@@ -129,6 +133,21 @@ export const liveUpdateSchema = (stopIds: [string, ...string[]]) =>
     reply: z.string().nullable(),
   });
 export type LiveUpdate = z.infer<ReturnType<typeof liveUpdateSchema>>;
+
+export const ImageKind = z.enum(["place", "scene", "unrelated"]);
+
+/** What a member's photo shows: a specific place to visit, a kind of spot to find more of, or neither. */
+export const ImageInterpretation = z.strictObject({
+  kind: ImageKind,
+  /** place only: the place's name as shown. */
+  placeName: z.string().nullable(),
+  /** place only: "City, ST" when known. */
+  city: z.string().nullable(),
+  /** One line describing what the image shows (for scene: the searchable qualities). */
+  description: z.string(),
+  category: OptionalCategory,
+});
+export type ImageInterpretation = z.infer<typeof ImageInterpretation>;
 
 export const ReplacementStop = z.strictObject({ stop: DraftStop, summary: z.string() });
 export type ReplacementStop = z.infer<typeof ReplacementStop>;

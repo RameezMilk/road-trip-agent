@@ -413,3 +413,136 @@ describe("Engine end to end", () => {
     expect(chat.lastTextTo(ALEX)).toContain("Can't message …0099");
   });
 });
+
+describe("Photos", () => {
+  const PNG = { mimeType: "image/png", data: Buffer.from("fake-png") };
+  const FALAFEL = {
+    kind: "place",
+    placeName: "Gypsy Queen Cuisine",
+    city: "Asheville, NC",
+    description: "Lebanese food truck praised for its falafel.",
+    category: "food",
+  };
+  const WATERFALL = {
+    kind: "scene",
+    placeName: null,
+    city: null,
+    description: "Tall forest waterfall with a swimming hole",
+    category: "activities",
+  };
+
+  /** As the chat runtime does: the photo is recorded in `chat_events`, then the engine handles it. */
+  async function sendPhoto(handle: string): Promise<void> {
+    const messageId = `m${++counter}`;
+    const active = await repo.findActiveMembership(handle);
+    await repo.recordChatEvent({
+      eventId: messageId,
+      occurredAt: now,
+      chatId: `any;-;${handle}`,
+      tripId: active?.trip.id ?? null,
+      memberId: active?.member.id ?? null,
+      direction: "inbound",
+      handle,
+      kind: "attachment",
+      text: null,
+      content: { type: "attachment", name: "photo.png", mimeType: "image/png", size: 8 },
+      metadata: {},
+    });
+    await engine.receive({ messageId, handle, chatId: `any;-;${handle}`, text: "", receivedAt: now, image: PNG });
+    await engine.settled();
+  }
+
+  const wishesOf = async (handle: string) => (await repo.listOptional((await tripOf(handle)).id)).map((r) => r.text);
+
+  it("turns a screenshot of a post into a 'visit' wish mid-questions, then asks the next question", async () => {
+    await join();
+    llm.on("image_interpretation", FALAFEL);
+    await sendPhoto(SAM);
+    expect(chat.textsTo(SAM).at(-2)).toContain("taking a look");
+    expect(chat.lastTextTo(SAM)).toBe(
+      "📸 Lebanese food truck praised for its falafel. Added to your wishes: “Visit Gypsy Queen Cuisine, Asheville, NC”.\n📍 Where to? e.g. Asheville",
+    );
+    expect(llm.calls.at(-1)).toMatchObject({ task: "image_interpretation", images: 1 });
+    expect(await wishesOf(SAM)).toEqual(["Visit Gypsy Queen Cuisine, Asheville, NC"]);
+    expect((await repo.findActiveMembership(SAM))?.member.requirementsReady).toBe(false);
+  });
+
+  it("a photo can answer 'Anything else?'; its caption afterwards adds nothing and isn't a vote", async () => {
+    await join();
+    await answer(); // Alex is done; Sam is at "Anything else?"
+    llm.on("itinerary_draft", DRAFT);
+    llm.on("image_interpretation", WATERFALL);
+    await sendPhoto(SAM);
+    expect(chat.textsTo(SAM)).toContain(
+      "📸 Tall forest waterfall with a swimming hole. I'll look for stops like that — added to your wishes: “Include stops similar to: Tall forest waterfall with a swimming hole”.",
+    );
+    expect(chat.textsTo(SAM).some((t) => t.startsWith("✅ You're all set!"))).toBe(true);
+    expect((await tripOf(SAM)).phase).toBe("voting"); // Sam finished → the vote started
+
+    const sent = chat.textsTo(SAM).length;
+    await say(SAM, "try to include stops similar to this");
+    expect(chat.textsTo(SAM)).toHaveLength(sent); // dropped: no reply, no vote
+    expect((await wishesOf(SAM)).filter((w) => w.startsWith("Include stops similar to"))).toHaveLength(1);
+  });
+
+  it("asks for the picture when the caption comes first, and ignores unrelated images", async () => {
+    await join();
+    await answer();
+    await say(SAM, "try to include stops similar to this");
+    expect(chat.lastTextTo(SAM)).toContain("Send the picture");
+    expect((await repo.findActiveMembership(SAM))?.member.requirementsReady).toBe(false);
+
+    llm.on("image_interpretation", { ...WATERFALL, kind: "unrelated", description: "A selfie", category: "other" });
+    await sendPhoto(SAM);
+    expect(chat.lastTextTo(SAM)).toContain("couldn't spot a place");
+    expect(await wishesOf(SAM)).toEqual(["a waterfall hike"]); // only Alex's wish
+  });
+
+  it("turns a photo into itinerary feedback during review, and declines photos on the road", async () => {
+    engine = makeEngine({ reviewStep: true });
+    await join();
+    canonicalizePlaces();
+    for (const who of [ALEX, SAM]) {
+      await say(who, "Chapel Hill to Asheville");
+      await say(who, "oct 17-18");
+      await say(who, "$200, halal");
+    }
+    llm.on("itinerary_draft", DRAFT);
+    await say(ALEX, "nope");
+    await say(SAM, "nope");
+    expect((await tripOf(ALEX)).phase).toBe("review");
+
+    llm.on("image_interpretation", { ...WATERFALL, description: "Mountain overlook at sunset", category: "stops" });
+    llm.on("feedback_assessment", {
+      impact: "minor",
+      summary: "Add a sunset overlook",
+      instruction: "Add a mountain overlook stop near sunset",
+      pollQuestion: null,
+      pollOptions: [],
+    });
+    await sendPhoto(ALEX);
+    const feedbackCall = llm.calls.find((c) => c.task === "feedback_assessment");
+    expect(feedbackCall?.prompt).toContain("Add stops similar to: Mountain overlook at sunset");
+    expect(chat.textsTo(ALEX)).toContain("📸 Mountain overlook at sunset.");
+    expect((await tripOf(ALEX)).currentVersion).toBe(2);
+
+    // A caption sent before its photo (minutes later, so not this photo's caption) waits for the photo.
+    now = new Date(now.getTime() + 5 * 60_000);
+    llm.set("feedback_assessment", {
+      impact: "minor",
+      summary: "",
+      instruction: "",
+      pollQuestion: null,
+      pollOptions: [],
+      awaitingPhoto: true,
+    });
+    await say(ALEX, "add something like this");
+    expect(chat.lastTextTo(ALEX)).toContain("Send the picture");
+    expect((await tripOf(ALEX)).currentVersion).toBe(2);
+
+    const trip = await tripOf(ALEX);
+    await repo.transition(trip.id, "review", "execution");
+    await sendPhoto(ALEX);
+    expect(chat.lastTextTo(ALEX)).toContain("while we're planning or reviewing");
+  });
+});

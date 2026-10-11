@@ -1,10 +1,12 @@
 import { diffItineraries, formatDiff } from "../../domain/diff";
 import { option, withAbstain } from "../../domain/reconcile";
 import { FeedbackAssessment, type Itinerary, type Poll, type PollOption, type TripPhase } from "../../schemas";
+import { LlmError } from "../../services/llm";
 import { conversationBlock, itineraryBlock, requirementsBlock, SYSTEM } from "../../services/prompts";
 import { copy } from "../copy";
 import type { Ctx, Engine } from "../engine";
 import { begin as beginExecution, launch } from "./execution";
+import { feedbackFor, interpretPhoto } from "./photo";
 import { castFromText, sendPoll } from "./voting";
 
 /** A requested change to the current itinerary. */
@@ -151,7 +153,7 @@ export async function checkAllApproved(e: Engine, tripId: string): Promise<void>
 }
 
 /** Natural-language feedback: Gemini sorts it into auto-apply / re-approve / group-vote. */
-async function feedback(e: Engine, ctx: Ctx): Promise<void> {
+async function feedback(e: Engine, ctx: Ctx, text = ctx.msg.text): Promise<void> {
   const itinerary = await e.currentItinerary(ctx.trip);
   if (!itinerary || !ctx.trip.resolved) return;
   const history = await e.repo.recentConversation(ctx.member.id, ctx.msg.messageId).catch(() => []);
@@ -160,19 +162,21 @@ async function feedback(e: Engine, ctx: Ctx): Promise<void> {
     assessment = await e.llm.generate({
       task: "feedback_assessment",
       system: SYSTEM.feedbackAssessment,
-      prompt: `${requirementsBlock(ctx.trip.resolved, e.planner.tripDays(ctx.trip.resolved))}\n\n${itineraryBlock(itinerary)}\n\n${conversationBlock(history)}Feedback: """${ctx.msg.text}"""`,
+      prompt: `${requirementsBlock(ctx.trip.resolved, e.planner.tripDays(ctx.trip.resolved))}\n\n${itineraryBlock(itinerary)}\n\n${conversationBlock(history)}Feedback: """${text}"""`,
       schema: FeedbackAssessment,
     });
   } catch (error) {
     e.log("feedback_assessment_failed", { error: String(error) });
     assessment = {
       impact: "material",
-      summary: ctx.msg.text.slice(0, 120),
-      instruction: ctx.msg.text,
+      summary: text.slice(0, 120),
+      instruction: text,
       pollQuestion: null,
       pollOptions: [],
+      awaitingPhoto: false,
     };
   }
+  if (assessment.awaitingPhoto) return void (await e.reply(ctx, copy.sendThePhoto()));
 
   if (assessment.impact === "conflicting" && assessment.pollOptions.length >= 1) {
     await e.reply(ctx, copy.conflictAck(assessment.summary));
@@ -199,10 +203,28 @@ async function feedback(e: Engine, ctx: Ctx): Promise<void> {
   const minor = assessment.impact === "minor";
   await e.reply(ctx, minor ? copy.minorAck() : copy.materialAck());
   await startDrafting(e, ctx.trip.id, ["review"], {
-    instruction: assessment.instruction || ctx.msg.text,
+    instruction: assessment.instruction || text,
     carryApprovals: minor,
     note: assessment.summary.slice(0, 120) || null,
   });
+}
+
+/** A photo during review: the place or kind of stop it shows becomes feedback on the itinerary. */
+export async function photoFeedback(e: Engine, ctx: Ctx): Promise<void> {
+  if (!ctx.trip.resolved) return;
+  await e.reply(ctx, copy.photoLooking());
+  let reading: Awaited<ReturnType<typeof interpretPhoto>>;
+  try {
+    reading = await interpretPhoto(e, ctx, `${ctx.trip.resolved.startLocation} → ${ctx.trip.resolved.endLocation}`);
+  } catch (error) {
+    if (!(error instanceof LlmError)) throw error;
+    e.log("image_interpretation_failed", { error: String(error) });
+    return void (await e.reply(ctx, copy.couldNot("I couldn't read that picture right now")));
+  }
+  const text = feedbackFor(reading.interpretation);
+  if (!text) return void (await e.reply(ctx, copy.photoUnclear()));
+  await e.reply(ctx, copy.photoSeen(reading.interpretation.description.trim().replace(/[.\s]+$/, "")));
+  await feedback(e, ctx, text);
 }
 
 export async function applyItineraryDecision(e: Engine, tripId: string, poll: Poll, winner: PollOption): Promise<void> {
