@@ -121,6 +121,8 @@ export class Engine {
       case "newtrip":
         return onboarding.newTripWhileActive(this, ctx, command.title);
       case "join":
+        // A trip that's already on the road doesn't block joining the next one (same rule as `newtrip`).
+        if (ctx.trip.phase === "execution") return onboarding.handleOutsider(this, msg, command);
         return this.reply(ctx, copy.alreadyInTrip(ctx.trip));
       case "status":
         return status.handle(this, ctx);

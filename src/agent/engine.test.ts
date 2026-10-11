@@ -293,6 +293,23 @@ describe("Engine end to end", () => {
     expect(chat.lastTextTo(SAM)).toContain("couldn't agree");
   });
 
+  it("lets members of a trip that's on the road start and join the next trip", async () => {
+    // Put both members into an execution-phase trip directly.
+    await onboard();
+    const first = await tripOf(ALEX);
+    await repo.transition(first.id, "planning", "execution");
+
+    await say(ALEX, "newtrip Round two");
+    await say(ALEX, "Alex");
+    const second = await tripOf(ALEX);
+    expect(second.id).not.toBe(first.id);
+    await say(ALEX, "invite 919-555-0002");
+    expect(chat.lastTextTo(SAM)).toContain("Alex invited you");
+    await say(SAM, "join");
+    expect((await tripOf(SAM)).id).toBe(second.id);
+    expect(chat.lastTextTo(SAM)).toContain("Round two");
+  });
+
   it("only the host can cancel, and help works for anyone", async () => {
     await say(SAM, "help");
     expect(chat.lastTextTo(SAM)).toContain("Commands:");
