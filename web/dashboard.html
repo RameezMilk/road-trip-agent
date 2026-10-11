@@ -3,7 +3,28 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#7cc8ef">
     <!--OG-->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+    <link rel="stylesheet" href="/web/styles.css">
   </head>
-  <body></body>
+  <body>
+    <div class="bubbles" aria-hidden="true"></div>
+    <div class="app">
+      <div class="bubble-only glass" id="bubble"></div>
+      <header class="header glass">
+        <div class="titles">
+          <h1 id="title">Loading trip…</h1>
+          <p class="sub" id="subtitle"></p>
+        </div>
+        <span class="badge" id="badge" hidden></span>
+      </header>
+      <section class="map-wrap glass" aria-label="Trip map"><div id="map"></div></section>
+      <main class="scroll glass" id="panel">
+        <p class="notice" id="notice">Loading…</p>
+      </main>
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+    <script src="/web/dashboard.js"></script>
+  </body>
 </html>

@@ -1,2 +1,30 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Vote</title></head><body></body></html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#7cc8ef">
+    <title>Trip vote</title>
+    <meta property="og:title" content="Trip vote">
+    <meta property="og:description" content="Tap to vote on your road trip">
+    <link rel="stylesheet" href="/web/styles.css">
+    <style>
+      body { overflow: auto; }
+      .app { height: auto; min-height: 100%; }
+    </style>
+  </head>
+  <body>
+    <div class="bubbles" aria-hidden="true"></div>
+    <div class="app">
+      <form class="poll glass" id="form">
+        <h1 id="question">Loading vote…</h1>
+        <div id="options" role="radiogroup" aria-labelledby="question"></div>
+        <label for="other" class="status">Or say it in your own words:</label>
+        <input class="other" id="other" name="other" maxlength="300" placeholder="Other… e.g. “the later weekend works better”">
+        <button class="btn" id="submit" type="submit">Vote</button>
+        <p class="status" id="status" role="status"></p>
+      </form>
+    </div>
+    <script src="/web/poll.js"></script>
+  </body>
+</html>
