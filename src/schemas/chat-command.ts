@@ -15,6 +15,7 @@ export const ChatCommandName = z.enum([
   "dashboard",
   "help",
   "cancel",
+  "leave",
 ]);
 export type ChatCommandName = z.infer<typeof ChatCommandName>;
 
@@ -28,6 +29,7 @@ export const ChatCommand = z.discriminatedUnion("name", [
   z.strictObject({ name: z.literal("dashboard") }),
   z.strictObject({ name: z.literal("help") }),
   z.strictObject({ name: z.literal("cancel") }),
+  z.strictObject({ name: z.literal("leave") }),
 ]);
 export type ChatCommand = z.infer<typeof ChatCommand>;
 
@@ -41,4 +43,5 @@ export const COMMAND_USAGE: Record<ChatCommandName, string> = {
   dashboard: "dashboard — resend the trip dashboard",
   help: "help — this list",
   cancel: "cancel — host: cancel the trip",
+  leave: "leave — leave the trip (the others carry on)",
 };

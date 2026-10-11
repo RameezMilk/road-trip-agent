@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { isNoWish, parseBudgetDiet, parseRoute, parseTripType, placeName, refersToPhoto, tidyPlace } from "./answers";
+import {
+  asksAboutOthers,
+  isNoWish,
+  parseBudgetDiet,
+  parseRoute,
+  parseTripType,
+  placeName,
+  refersToPhoto,
+  tidyPlace,
+  wantsToLeave,
+} from "./answers";
 
 describe("tidyPlace", () => {
   it("title-cases and formats a trailing state code", () => {
@@ -126,5 +136,29 @@ describe("refersToPhoto", () => {
       expect(refersToPhoto(text)).toBe(true);
     for (const text of ["beach day", "nope", "a waterfall hike", "like this trip a lot", "seafood"])
       expect(refersToPhoto(text)).toBe(false);
+  });
+});
+
+describe("wantsToLeave", () => {
+  it("spots someone dropping out, not a planning answer", () => {
+    for (const text of [
+      "I don’t want to go on the trip anymore",
+      "i dont want to go anymore",
+      "count me out",
+      "I'm out",
+      "I can't make it anymore",
+    ])
+      expect(wantsToLeave(text)).toBe(true);
+    for (const text of ["I don't want to go to the beach", "no fast food", "out of budget", "nope"])
+      expect(wantsToLeave(text)).toBe(false);
+  });
+});
+
+describe("asksAboutOthers", () => {
+  it("spots questions about the others' answers", () => {
+    for (const text of ["Where does Rameez wanna go?", "what did everyone pick?", "what's Sam's budget?"])
+      expect(asksAboutOthers(text)).toBe(true);
+    for (const text of ["where are we going?", "what do you mean?", "Chapel Hill to Wilmington", "oct 18-19"])
+      expect(asksAboutOthers(text)).toBe(false);
   });
 });

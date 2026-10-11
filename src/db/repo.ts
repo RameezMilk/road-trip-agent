@@ -231,6 +231,19 @@ export class Repo {
     await this.db.delete(t.members).where(and(eq(t.members.id, memberId), eq(t.members.status, "invited")));
   }
 
+  /**
+   * The member leaves the trip: status `left` (so nothing counts them any more) and their votes on polls
+   * still open are withdrawn, so those polls can close on the remaining members' votes.
+   */
+  async leaveTrip(tripId: string, memberId: string): Promise<void> {
+    await this.db.update(t.members).set({ status: "left", card: null }).where(eq(t.members.id, memberId));
+    const open = (await this.listPolls(tripId)).filter((p) => p.status !== "closed").map((p) => p.id);
+    if (open.length)
+      await this.db
+        .delete(t.pollVotes)
+        .where(and(eq(t.pollVotes.memberId, memberId), inArray(t.pollVotes.pollId, open)));
+  }
+
   async joinMember(memberId: string, chatId: string | null): Promise<Member> {
     const [row] = await this.db
       .update(t.members)

@@ -1,6 +1,14 @@
 import { diffItineraries, formatDiff } from "../../domain/diff";
 import { option, withAbstain } from "../../domain/reconcile";
-import { FeedbackAssessment, type Itinerary, type Poll, type PollOption, type TripPhase } from "../../schemas";
+import { KEEP_CURRENT } from "../../domain/tally";
+import {
+  FeedbackAssessment,
+  type Itinerary,
+  type Poll,
+  type PollOption,
+  type ResolvedRequirements,
+  type TripPhase,
+} from "../../schemas";
 import { LlmError } from "../../services/llm";
 import { conversationBlock, itineraryBlock, requirementsBlock, SYSTEM } from "../../services/prompts";
 import { copy } from "../copy";
@@ -15,9 +23,24 @@ export interface Revision {
   /** Minor changes keep everyone's approvals. */
   carryApprovals: boolean;
   note: string | null;
+  /** A change the group voted on while on the road: the new plan goes straight back to the road. */
+  backToRoad?: boolean;
+  /** New end date / destination from that vote; applied to the trip when the new plan is saved. */
+  tripChange?: TripChange;
 }
 
-export const KEEP_CURRENT = "Keep the current itinerary unchanged.";
+export type TripChange = { endDate: string | null; endLocation: string | null };
+
+export function applyTripChange(resolved: ResolvedRequirements, change: TripChange | undefined): ResolvedRequirements {
+  if (!change) return resolved;
+  return {
+    ...resolved,
+    ...(change.endDate ? { endDate: change.endDate } : {}),
+    ...(change.endLocation ? { endLocation: change.endLocation } : {}),
+  };
+}
+
+export { KEEP_CURRENT };
 
 export async function startDrafting(
   e: Engine,
@@ -41,7 +64,7 @@ export async function draftItinerary(e: Engine, tripId: string, revision: Revisi
     version: trip.currentVersion + 1,
     title: trip.title,
     timeZone: trip.timeZone,
-    resolved: trip.resolved,
+    resolved: applyTripChange(trip.resolved, revision?.tripChange),
     memberCount: members.length,
     ...(previous && revision ? { revision: { previous, instruction: revision.instruction } } : {}),
   };
@@ -76,6 +99,16 @@ export async function commitDraft(
   }
   const current = { ...trip, currentVersion: itinerary.version };
 
+  // A change voted on the road: the trip takes the new dates/destination and goes straight back on the road.
+  if (revision?.backToRoad) {
+    if (trip.resolved)
+      await e.repo.updateTrip(tripId, { resolved: applyTripChange(trip.resolved, revision.tripChange) });
+    if (!(await e.repo.transition(tripId, "drafting", "execution"))) return;
+    await e.broadcast(tripId, copy.roadUpdated(itinerary.version, revision.note, diff ?? ""));
+    await e.refreshCards(current, itinerary);
+    return;
+  }
+
   // Without the review step the first itinerary goes straight to the road.
   if (!previous && !e.config.reviewStep) {
     if (await e.repo.transition(tripId, "drafting", "execution")) await launch(e, current, itinerary);
@@ -101,10 +134,21 @@ export async function commitDraft(
   await checkAllApproved(e, tripId);
 }
 
-export async function draftFailed(e: Engine, tripId: string, error: unknown): Promise<void> {
+export async function draftFailed(
+  e: Engine,
+  tripId: string,
+  error: unknown,
+  revision: Revision | null = null,
+): Promise<void> {
   const trip = await e.repo.getTrip(tripId);
   if (trip?.phase !== "drafting") return;
   const reason = error instanceof Error ? error.message.replace(/^[a-z_]+: /, "") : "unknown error";
+  if (revision?.backToRoad) {
+    // The trip keeps its current plan (and dates/destination) and carries on.
+    await e.repo.transition(tripId, "drafting", "execution");
+    await e.broadcast(tripId, copy.roadChangeFailed(reason.slice(0, 160), trip.currentVersion));
+    return;
+  }
   if (trip.currentVersion > 0) {
     await e.repo.transition(tripId, "drafting", "review");
     await e.broadcast(tripId, copy.draftFailed(reason.slice(0, 160), true));
@@ -212,7 +256,6 @@ async function feedback(e: Engine, ctx: Ctx, text = ctx.msg.text): Promise<void>
 /** A photo during review: the place or kind of stop it shows becomes feedback on the itinerary. */
 export async function photoFeedback(e: Engine, ctx: Ctx): Promise<void> {
   if (!ctx.trip.resolved) return;
-  await e.reply(ctx, copy.photoLooking());
   let reading: Awaited<ReturnType<typeof interpretPhoto>>;
   try {
     reading = await interpretPhoto(e, ctx, `${ctx.trip.resolved.startLocation} → ${ctx.trip.resolved.endLocation}`);
@@ -228,14 +271,19 @@ export async function photoFeedback(e: Engine, ctx: Ctx): Promise<void> {
 }
 
 export async function applyItineraryDecision(e: Engine, tripId: string, poll: Poll, winner: PollOption): Promise<void> {
+  // Review polls run in `review`; a change to the trip proposed on the road is voted on in `voting`.
+  const trip = await e.repo.getTrip(tripId);
+  const onTheRoad = trip?.phase === "voting";
   if (winner.value.kind !== "itinerary" || winner.value.instruction === KEEP_CURRENT) {
-    const trip = await e.repo.getTrip(tripId);
     if (trip) await e.broadcast(tripId, copy.keepCurrent(trip.currentVersion));
+    if (onTheRoad) await e.repo.transition(tripId, "voting", "execution");
     return;
   }
-  await startDrafting(e, tripId, ["review"], {
+  await startDrafting(e, tripId, onTheRoad ? ["voting"] : ["review"], {
     instruction: winner.value.instruction,
     carryApprovals: false,
-    note: poll.question,
+    note: onTheRoad ? winner.label.replace(/^Yes — /, "") : poll.question,
+    ...(onTheRoad ? { backToRoad: true } : {}),
+    ...(winner.value.tripChange ? { tripChange: winner.value.tripChange } : {}),
   });
 }

@@ -10,6 +10,7 @@ export type ParseResult =
 const PHRASES: ReadonlyArray<readonly [RegExp, ChatCommandName]> = [
   [/^new trip\b/i, "newtrip"],
   [/^start (?:a )?(?:new )?trip\b/i, "newtrip"],
+  [/^leave (?:the |this )?trip[.!]*$/i, "leave"],
 ];
 
 const ARG_COMMANDS = new Set<ChatCommandName>(["newtrip", "invite", "join"]);

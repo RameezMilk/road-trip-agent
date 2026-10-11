@@ -346,6 +346,17 @@ export async function castFromWidget(
   return { ok: true, label };
 }
 
+/** After someone leaves: closes the open poll if everyone still in the trip has now voted. */
+export async function recheckOpenPoll(e: Engine, tripId: string): Promise<boolean> {
+  const poll = (await e.repo.listPolls(tripId)).find((p) => p.status === "open");
+  if (!poll) return false;
+  const members = await e.joinedMembers(tripId);
+  const votes = (await e.repo.listVotes(poll.id)).filter((v) => members.some((m) => m.id === v.memberId));
+  if (!members.length || !members.every((m) => votes.some((v) => v.memberId === m.id))) return false;
+  await closePoll(e, poll, votes);
+  return true;
+}
+
 /** Everyone has voted: pick the winner, revote once on a tie, abort if a must-have still can't be agreed. */
 async function closePoll(e: Engine, poll: Poll, votes: PollVote[]): Promise<void> {
   const outcome = tally(poll, votes);

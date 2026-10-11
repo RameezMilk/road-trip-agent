@@ -1,7 +1,7 @@
 import { helpText, parseCommand } from "../chat/commands";
 import { type CardLayout, type ChatPort, type NameDirectory, noNames, type Recipient } from "../chat/port";
 import type { Repo } from "../db/repo";
-import { refersToPhoto } from "../domain/answers";
+import { refersToPhoto, wantsToLeave } from "../domain/answers";
 import { draftKey } from "../domain/reconcile";
 import type { ChatCommand, Itinerary, ItineraryDraft, Member, ResolvedRequirements, Trip } from "../schemas";
 import { type Decider, noDecider } from "../services/decisions";
@@ -10,6 +10,7 @@ import type { Planner } from "../services/planner";
 import { copy } from "./copy";
 import { KeyedQueue } from "./keyed-queue";
 import * as execution from "./phases/execution";
+import * as leaving from "./phases/leave";
 import * as onboarding from "./phases/onboarding";
 import * as planning from "./phases/planning";
 import * as reminders from "./phases/reminders";
@@ -57,6 +58,8 @@ export interface Inbound {
   receivedAt: Date;
   /** A photo the member sent (bytes are passed to Gemini, never stored). */
   image?: { mimeType: string; data: Buffer };
+  /** The runtime already replied "📸 taking a look" (before downloading the photo). */
+  acknowledged?: boolean;
 }
 
 export interface Ctx {
@@ -152,6 +155,10 @@ export class Engine {
       const since = new Date(this.clock().getTime() - PHOTO_CAPTION_MS);
       if (await this.repo.lastImageAt(ctx.member.id, since)) return;
     }
+    // "I don't want to go anymore": confirm with `leave` (never treat it as a change to everyone's plan).
+    if (!command && wantsToLeave(msg.text)) {
+      return this.reply(ctx, ctx.member.role === "host" ? copy.hostCantLeave() : copy.confirmLeave());
+    }
 
     switch (command?.name) {
       case "newtrip":
@@ -164,6 +171,8 @@ export class Engine {
         return status.handle(this, ctx);
       case "cancel":
         return onboarding.cancel(this, ctx);
+      case "leave":
+        return leaving.leave(this, ctx);
       case "dashboard":
         return execution.sendDashboard(this, ctx);
       default:
@@ -190,17 +199,23 @@ export class Engine {
     }
   }
 
-  /** Photos count while planning (they become wishes) and reviewing (they become feedback). */
+  /** Photos become wishes while planning, feedback while reviewing, and new stops on the road. */
   private async handlePhoto(ctx: Ctx): Promise<void> {
+    const looking = async () => {
+      if (!ctx.msg.acknowledged) await this.reply(ctx, copy.photoLooking());
+    };
     switch (ctx.trip.phase) {
       case "planning":
+        await looking();
         return planning.capturePhoto(this, ctx);
       case "review": {
         const open = (await this.repo.listPolls(ctx.trip.id)).find((p) => p.status === "open");
         if (open) return this.reply(ctx, copy.pollText(open, open.round > 1));
+        await looking();
         return review.photoFeedback(this, ctx);
       }
       case "execution":
+        await looking();
         return execution.photoStop(this, ctx);
       default:
         return this.reply(ctx, copy.photoNotNow());
@@ -335,7 +350,7 @@ export class Engine {
       } catch (error) {
         this.draftJobs.delete(tripId);
         this.log("draft_failed", { tripId, error: String(error) });
-        await this.queue.run(tripId, () => review.draftFailed(this, tripId, error));
+        await this.queue.run(tripId, () => review.draftFailed(this, tripId, error, revision));
       }
     })();
     this.track(job);

@@ -42,6 +42,8 @@ export async function runChatLoop(deps: {
       const image = ev.image;
       const work = perSender
         .run(handle, async () => {
+          // Say so right away: downloading a photo from Photon can take several seconds.
+          await engine.sendTo(to, copy.photoLooking());
           const data = await readImage(image).catch((error) => {
             log("photo_read_failed", { error: String(error), mimeType: image.mimeType });
             return null;
@@ -55,6 +57,7 @@ export async function runChatLoop(deps: {
             text: ev.text ?? "", // the caption, when the photo came with one
             receivedAt: ev.occurredAt,
             image: { mimeType: image.mimeType, data },
+            acknowledged: true,
           });
         })
         .catch((error) => {

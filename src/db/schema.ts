@@ -43,7 +43,7 @@ export const members = pgTable(
     handle: text("handle").notNull(),
     chatId: text("chat_id"),
     role: text("role").$type<"host" | "member">().notNull(),
-    status: text("status").$type<"invited" | "joined">().notNull(),
+    status: text("status").$type<"invited" | "joined" | "left">().notNull(),
     name: text("name"),
     onboardingReady: boolean("onboarding_ready").notNull().default(false),
     requirementsReady: boolean("requirements_ready").notNull().default(false),

@@ -1,4 +1,12 @@
-import { isNoWish, parseBudgetDiet, parseRoute, parseTripType, placeName, refersToPhoto } from "../../domain/answers";
+import {
+  asksAboutOthers,
+  isNoWish,
+  parseBudgetDiet,
+  parseRoute,
+  parseTripType,
+  placeName,
+  refersToPhoto,
+} from "../../domain/answers";
 import { parseDateRange } from "../../domain/dates";
 import { datesLabel, isComplete, missingFields } from "../../domain/reconcile";
 import {
@@ -95,6 +103,10 @@ export async function handle(e: Engine, ctx: Ctx): Promise<void> {
 
   const reqs = await e.repo.getPredefined(ctx.member.id);
   const isHost = ctx.member.role === "host";
+  // "Where does Rameez wanna go?": answers stay private until the vote; repeat their own question.
+  if (asksAboutOthers(ctx.msg.text)) {
+    return void (await e.reply(ctx, `${copy.picksSecret()}\n${nextQuestion(reqs, isHost) ?? copy.askWish()}`));
+  }
   if (openFields(reqs, isHost).length) return answer(e, ctx, reqs);
   if (/\b(change|actually|update|instead|correction|wait)\b/i.test(ctx.msg.text)) {
     const result = await extractWithGemini(e, ctx, reqs, null);
@@ -120,7 +132,7 @@ async function answer(e: Engine, ctx: Ctx, reqs: PredefinedRequirements): Promis
   const quick = parseDeterministic(reqs, ctx.msg.text, today, isHost);
   const result = quick ? mergePredefined(reqs, quick, today) : await extractWithGemini(e, ctx, reqs, asked);
   await save(e, ctx, result.reqs);
-  if (quick && (result.changed.includes("startLocation") || result.changed.includes("endLocation"))) {
+  if (result.changed.includes("startLocation") || result.changed.includes("endLocation")) {
     canonicalizeLater(e, ctx, result.reqs);
   }
 
@@ -144,7 +156,8 @@ async function save(e: Engine, ctx: Ctx, reqs: PredefinedRequirements): Promise<
 
 /**
  * Typed places ("chapel hil" → "wilmingtn") become "City, ST" in the background while the member answers
- * the next question, so the vote, geocoding and dedupe see clean names without making anyone wait.
+ * the next question, so the vote, geocoding and dedupe see clean names without making anyone wait. Trips
+ * are US-only: a place outside the US is cleared and the member is asked again.
  */
 function canonicalizeLater(e: Engine, ctx: Ctx, typed: PredefinedRequirements): void {
   // The host typed both ends; a guest typed only the destination (their start is the host's).
@@ -167,12 +180,19 @@ function canonicalizeLater(e: Engine, ctx: Ctx, typed: PredefinedRequirements): 
       if ((await e.repo.getTrip(tripId))?.phase !== "planning") return; // the vote already used them
       const current = await e.repo.getPredefined(memberId);
       if (current.endLocation !== end || (isHost && current.startLocation !== start)) return; // changed meanwhile
-      await e.repo.savePredefined(memberId, tripId, {
+      const startAbroad = isHost && !out.startInUsa;
+      const endAbroad = !out.endInUsa;
+      const next = {
         ...current,
-        ...(isHost ? { startLocation: startPlace.data } : {}),
-        endLocation: endPlace.data,
-      });
+        ...(isHost ? { startLocation: startAbroad ? null : startPlace.data } : {}),
+        endLocation: endAbroad ? null : endPlace.data,
+      };
+      await e.repo.savePredefined(memberId, tripId, next);
       if (isHost) await syncHostStart(e, tripId);
+      if (!startAbroad && !endAbroad) return;
+      await e.repo.updateMember(memberId, { requirementsReady: false });
+      const member = (await e.joinedMembers(tripId)).find((m) => m.id === memberId);
+      if (member) await e.sendTo(e.recipient(member), copy.usaOnly(nextQuestion(next, isHost)));
     });
   })().catch((error) => e.log("place_canonicalization_failed", { error: String(error) }));
   e.track(job);
@@ -426,7 +446,6 @@ async function classifyWish(
  * finishes the member, like a text wish.
  */
 export async function capturePhoto(e: Engine, ctx: Ctx): Promise<void> {
-  await e.reply(ctx, copy.photoLooking());
   const reqs = await e.repo.getPredefined(ctx.member.id);
   const isHost = ctx.member.role === "host";
   const trip = `${reqs.startLocation ?? "start not set yet"} → ${reqs.endLocation ?? "destination not set yet"}`;

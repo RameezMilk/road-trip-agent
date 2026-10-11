@@ -414,6 +414,130 @@ describe("Engine end to end", () => {
   });
 });
 
+describe("Leaving, on-the-road changes and US-only trips", () => {
+  /** Both agree on everything → straight to the road. */
+  async function onTheRoad(): Promise<string> {
+    await join();
+    canonicalizePlaces();
+    for (const who of [ALEX, SAM]) {
+      await say(who, "Chapel Hill to Asheville");
+      await say(who, "oct 17-18");
+      await say(who, "$200, halal");
+    }
+    llm.on("itinerary_draft", DRAFT);
+    await say(ALEX, "nope");
+    await say(SAM, "nope");
+    const trip = await tripOf(ALEX);
+    expect(trip.phase).toBe("execution");
+    return trip.id;
+  }
+
+  const change = (fields: Record<string, unknown>) => ({
+    kind: "change_trip",
+    delayMinutes: null,
+    stopId: null,
+    request: null,
+    reply: null,
+    extraDays: null,
+    newDestination: null,
+    destinationInUsa: null,
+    ...fields,
+  });
+
+  it("someone can leave mid-vote: the vote closes on the others' votes and the trip carries on", async () => {
+    await join();
+    await answer();
+    llm.on("itinerary_draft", DRAFT);
+    await say(SAM, "nope"); // the route poll opens (Asheville vs Boone)
+    await say(ALEX, "1");
+    await say(SAM, "leave");
+    expect(chat.lastTextTo(SAM)).toContain("You've left");
+    expect(chat.textsTo(ALEX)).toContain("👋 Sam left the trip — carrying on without them.");
+    expect(chat.textsTo(ALEX)).toContain("📊 Asheville, NC wins! (1/1)");
+    await say(ALEX, "1"); // the dates poll, now Alex's alone
+    const trip = await tripOf(ALEX);
+    expect(trip.phase).toBe("execution");
+    expect(trip.resolved?.budgetPerPersonUsd).toBe(200); // Sam's $150 no longer counts
+    expect(chat.timeline(SAM)).not.toContain("[card]");
+    expect(await repo.findActiveMembership(SAM)).toBeNull(); // free to start or join another trip
+  });
+
+  it("the host can't leave; 'I don't want to go anymore' asks to confirm instead of re-planning", async () => {
+    await onTheRoad();
+    await say(ALEX, "leave");
+    expect(chat.lastTextTo(ALEX)).toBe("You're the host — text `cancel` to end the trip for everyone.");
+    const calls = llm.calls.length;
+    await say(SAM, "I don’t want to go on the trip anymore");
+    expect(chat.lastTextTo(SAM)).toContain("Reply `leave`");
+    expect(llm.calls).toHaveLength(calls); // no re-plan
+    await say(SAM, "leave");
+    expect((await tripOf(ALEX)).phase).toBe("execution");
+    expect(chat.lastTextTo(ALEX)).toBe("👋 Sam left the trip — carrying on without them.");
+  });
+
+  it("on the road, 'add an extra day' goes to a group vote; yes re-plans, a tie keeps the plan", async () => {
+    const tripId = await onTheRoad();
+    llm.on("live_update", change({ extraDays: 1 }));
+    await say(SAM, "can we add an extra day?");
+    expect((await tripOf(ALEX)).phase).toBe("voting");
+    expect(chat.lastTextTo(ALEX)).toBe(
+      "🗳️ Change the trip: add 1 day (ends Mon, Oct 19)?\n1️⃣ Yes — add 1 day (ends Mon, Oct 19)\n2️⃣ No — keep the current plan\nReply with a number",
+    );
+    await say(ALEX, "1");
+    await say(SAM, "1");
+    let trip = await tripOf(ALEX);
+    expect(trip.phase).toBe("execution");
+    expect(trip.resolved?.endDate).toBe("2026-10-19");
+    expect(trip.currentVersion).toBe(2);
+    expect(chat.textsTo(SAM).some((t) => t.startsWith("🔄 Plan updated (v2) — add 1 day (ends Mon, Oct 19)"))).toBe(
+      true,
+    );
+    expect(chat.timeline(SAM).at(-1)).toBe("[card edit]");
+
+    // Split vote, then still split on the revote: the current plan stays.
+    await say(ALEX, "one more day?");
+    await say(ALEX, "1");
+    await say(SAM, "2");
+    await say(ALEX, "1");
+    await say(SAM, "2");
+    trip = await tripOf(ALEX);
+    expect(trip.phase).toBe("execution");
+    expect(trip.currentVersion).toBe(2);
+    expect(chat.textsTo(ALEX)).toContain("👌 Keeping the current plan (v2).");
+    expect(await repo.getItinerary(tripId, 3)).toBeNull();
+  });
+
+  it("trips stay in the US: on the road and while planning", async () => {
+    await onTheRoad();
+    llm.on("live_update", change({ newDestination: "Islamabad", destinationInUsa: false }));
+    await say(SAM, "Can you make it so we drive to Islamabad");
+    expect(chat.lastTextTo(SAM)).toBe("🇺🇸 I only plan road trips within the US.");
+    expect((await tripOf(ALEX)).phase).toBe("execution");
+  });
+
+  it("a destination outside the US is cleared and asked again; questions about others' picks get a secret", async () => {
+    await join();
+    llm.on("place_canonicalization", {
+      startLocation: "Chapel Hill, NC",
+      endLocation: "Islamabad",
+      startInUsa: true,
+      endInUsa: false,
+    });
+    await say(ALEX, "Chapel Hill to Islamabad");
+    expect(chat.lastTextTo(ALEX)).toBe("🇺🇸 I only plan road trips within the US.\n🏁 And where to?");
+    const alex = await repo.findActiveMembership(ALEX);
+    expect(await repo.getPredefined(alex?.member.id as string)).toMatchObject({
+      startLocation: "Chapel Hill, NC",
+      endLocation: null,
+    });
+
+    await say(SAM, "Where does Alex wanna go?");
+    expect(chat.lastTextTo(SAM)).toBe(
+      "🤫 Everyone's picks stay secret until the vote!\n📍 Where to? e.g. Asheville\n(leaving from Chapel Hill, NC)",
+    );
+  });
+});
+
 describe("Photos", () => {
   const PNG = { mimeType: "image/png", data: Buffer.from("fake-png") };
   const FALAFEL = {

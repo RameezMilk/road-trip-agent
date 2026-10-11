@@ -33,7 +33,14 @@ export function tally(poll: Poll, votes: PollVote[]): TallyOutcome {
 }
 
 /** Deterministic tiebreak for optional/itinerary polls: more supporting requirements, then listed first. */
+/** The "keep the current plan" option of an itinerary poll (code adds it; a tie keeps the status quo). */
+export const KEEP_CURRENT = "Keep the current itinerary unchanged.";
+
 export function tiebreak(poll: Poll, optionIds: string[]): string {
+  const keep = poll.options.find(
+    (o) => optionIds.includes(o.id) && o.value.kind === "itinerary" && o.value.instruction === KEEP_CURRENT,
+  );
+  if (keep) return keep.id;
   const support = (id: string) => {
     const value = poll.options.find((o) => o.id === id)?.value;
     return value?.kind === "optional" ? value.requirementIds.length : 0;

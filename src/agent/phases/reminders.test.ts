@@ -155,6 +155,14 @@ describe("reminders", () => {
     expect(again).toContain("Sam is waiting on you");
   });
 
+  it("doesn't nudge anyone nobody is waiting on (a host alone in a new trip)", async () => {
+    const CAROL = "+19195550003";
+    await say(CAROL, "new trip");
+    await say(CAROL, "Carol");
+    advance(5 * MIN);
+    expect(await remindersTo(CAROL)).toEqual([]);
+  });
+
   it("leaves old unanswered messages alone (an abandoned trip never pings anyone)", async () => {
     advance(3 * 60 * MIN);
     expect(await remindersTo(ALEX)).toEqual([]);

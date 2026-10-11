@@ -117,14 +117,21 @@ Never move it to serverless or edge, because the stream must stay connected.
    - `delay` runs `shiftSchedule` for the same day;
    - `replace_stop` runs `Planner.replaceStop`;
    - `add_stop` runs `Planner.addStop`: Gemini (with Google Search) finds the real place, OSM locates it, and it goes between the stops still ahead where it adds the least driving (straight-line cheapest insertion, then OSRM re-times everything after it). Nothing is dropped, however far off the route it is;
-   - `replan_remaining` re-drafts the rest.
+   - `change_trip` (new dates or destination, e.g. "add an extra day") sends the trip **back to a vote**: phase `voting`, one `itinerary` poll "Change the trip: add 1 day (ends Mon, Oct 19)?" with Yes / "No — keep the current plan". Yes re-plans the rest with the new end date/destination (`Revision.backToRoad` + `tripChange`, applied to `resolved` only when the new plan is saved) and the trip goes straight back to `execution` with a diff and edited cards; No, or a tie after the revote, keeps the plan (`tiebreak` prefers `KEEP_CURRENT`). A destination outside the US is declined;
+   - `replan_remaining` re-drafts the rest, and a re-plan that would drop every stop is refused.
    - **A photo** ("saw this on Instagram, let's go here") goes through `ImageInterpretation` (caption included), then the place itself, or a real place like the view, is added with `Planner.addStop` (`execution.photoStop`).
 
    Changes apply immediately, everyone is told, and cards are edited in place.
 
-`help`, `status`, `dashboard` and `cancel` (host only) work in every phase.
+`help`, `status`, `dashboard`, `cancel` (host only) and `leave` work in every phase.
 
-**Reminders** (`phases/reminders.ts`, swept every 5 s by `Engine.startReminders`): in onboarding, planning, voting and review, a joined member who owes a step and hasn't answered the agent's last message is nudged after 15 s, then ×4 (1, 4, 16, 64 min), at most 5 times. Each reminder names who is already waiting and for how long. All timing is read from the hypertables (`Repo.reminderState`): the last reply and the unanswered message come from `chat_events`, and reminders sent come from `trip_events` `reminder_sent` rows. A reply or a new phase resets the count. In planning a reminder repeats the member's current grouped question (or "✨ Anything else?"). An unanswered message older than 2 hours is ignored, so abandoned trips never ping anyone. `REMINDERS=false` turns them off (e.g. for a tightly scripted live demo, where a 15 s nudge can land mid-explanation).
+**Leaving** (`phases/leave.ts`): a member who texts `leave` (or "I don't want to go anymore", which asks them to confirm with `leave`, so it can never be read as a change to everyone's plan) gets status `left`: nothing counts them any more (answers, votes, approvals, reminders, the dashboard crew), and their votes on open polls are withdrawn. The trip carries on: a vote only waiting on them closes (`voting.recheckOpenPoll`), planning moves to the vote, an approval round completes, and the final requirements are re-reconciled without them. The host can't leave (`cancel` ends the trip).
+
+**Trips are US-only.** While planning, `PlaceCanonicalization` (background, for every typed route) flags a place outside the US; it's cleared and the member is asked again ("🇺🇸 I only plan road trips within the US."). Ambiguous names prefer North Carolina ("Wilmington" → "Wilmington, NC"). On the road, `change_trip` to a non-US destination is declined.
+
+**Privacy in chat:** "Where does Rameez wanna go?" gets "🤫 Everyone's picks stay secret until the vote!" plus the member's own question (`asksAboutOthers`, no Gemini call).
+
+**Reminders** (`phases/reminders.ts`, swept every 5 s by `Engine.startReminders`): only when someone is already waiting on the member (a host alone in a new trip, or a vote nobody has answered, gets no nudge). In onboarding, planning, voting and review, a joined member who owes a step and hasn't answered the agent's last message is nudged after 15 s, then ×4 (1, 4, 16, 64 min), at most 5 times. Each reminder names who is already waiting and for how long. All timing is read from the hypertables (`Repo.reminderState`): the last reply and the unanswered message come from `chat_events`, and reminders sent come from `trip_events` `reminder_sent` rows. A reply or a new phase resets the count. In planning a reminder repeats the member's current grouped question (or "✨ Anything else?"). An unanswered message older than 2 hours is ignored, so abandoned trips never ping anyone. `REMINDERS=false` turns them off (e.g. for a tightly scripted live demo, where a 15 s nudge can land mid-explanation).
 
 ## Rules that aren't obvious from the code
 
@@ -204,3 +211,6 @@ Never move it to serverless or edge, because the stream must stay connected.
 | 30 | Dashboard hosted on ngrok | `demo:up` uses a Cloudflare quick tunnel and falls back to ngrok | Cloudflare quick tunnels show no browser warning page. The ngrok header can't be attached to iMessage's own page load. |
 | 31 | Everyone gives a start and an end; differing routes are voted on | **The host sets the start** for everyone. Guests are asked only "Where to?", and the route poll lists destinations only | Owner decision. The group leaves from one place, and the vote is simpler. |
 | 32 | Ask each person's name | Names come from the Photon users list, so nobody is asked unless Photon has no first name for them | Owner decision: Photon already stores registered users' names. One cached list call; on failure the agent just asks. |
+| 33 | (unspecified) | Any member but the host can `leave`; the trip carries on without them (votes, waits and approvals stop counting them) | Owner request: someone dropping out mustn't stall or disrupt the group. "I don't want to go anymore" once emptied a trip for everyone via a re-plan. |
+| 34 | Changes on the road apply immediately (#10) | Except changes to the trip's **dates or destination** ("add an extra day"): those go back to a quick group vote; a tie keeps the plan | Owner decision: those are the group's call, like the original route/dates votes. |
+| 35 | (unspecified) | Road trips are **US-only**: non-US places are declined while planning and on the road | Owner decision. The geocoders are US-only anyway. |

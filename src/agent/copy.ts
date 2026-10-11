@@ -222,6 +222,24 @@ export const copy = {
   photoUnclear: () =>
     "📸 I couldn't spot a place or a kind of stop in that picture. Send a screenshot of the post, or a photo of the kind of spot you'd like.",
   photoNotNow: () => "📸 I can't use photos at this step — mind typing it out?",
+  picksSecret: () => "🤫 Everyone's picks stay secret until the vote!",
+  usaOnly: (question: string | null) => `🇺🇸 I only plan road trips within the US.${question ? `\n${question}` : ""}`,
+  confirmLeave: () => "😢 Want to leave the trip? Reply `leave` — the others carry on without you.",
+  hostCantLeave: () => "You're the host — text `cancel` to end the trip for everyone.",
+  youLeft: (trip: Trip) => `👋 You've left “${trip.title}”. Text \`newtrip\` anytime to start your own.`,
+  someoneLeft: (name: string) => `👋 ${name} left the trip — carrying on without them.`,
+  changeQuestion: (summary: string) => `Change the trip: ${summary}?`,
+  changeYes: (summary: string) => `Yes — ${summary}`,
+  changeNo: () => "No — keep the current plan",
+  changeUnclear: () => "What should change — the dates (e.g. “add a day”) or the destination?",
+  tripTooLong: () => "Trips can be up to 14 days.",
+  roadUpdated: (version: number, note: string | null, diff: string) =>
+    [`🔄 Plan updated (v${version})${note ? ` — ${note}` : ""}`, diff, "🗺️ Dashboard updated"]
+      .filter(Boolean)
+      .join("\n"),
+  roadChangeFailed: (reason: string, version: number) =>
+    `⚠️ I couldn't re-plan that (${reason}) — keeping the current plan (v${version}).`,
+  replanEmptied: () => "that would have dropped every stop from the plan",
   photoUnreadable: () => "📸 I couldn't open that picture. Mind sending it again?",
   sendThePhoto: () => "📸 Send the picture and I'll work it in.",
   reminder: (name: string | null, waiting: Array<{ name: string; waitedMs: number }>, ask: string) => {

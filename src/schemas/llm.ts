@@ -83,6 +83,9 @@ export type DraftStop = z.infer<typeof DraftStop>;
 export const PlaceCanonicalization = z.strictObject({
   startLocation: z.string().min(2).max(120),
   endLocation: z.string().min(2).max(120),
+  /** Road trips are US-only: false when that place is outside the United States. */
+  startInUsa: z.boolean().default(true),
+  endInUsa: z.boolean().default(true),
 });
 export type PlaceCanonicalization = z.infer<typeof PlaceCanonicalization>;
 
@@ -120,7 +123,7 @@ export const FeedbackAssessment = z.strictObject({
 });
 export type FeedbackAssessment = z.infer<typeof FeedbackAssessment>;
 
-export const LiveUpdateKind = z.enum(["delay", "replace_stop", "add_stop", "replan_remaining", "none"]);
+export const LiveUpdateKind = z.enum(["delay", "replace_stop", "add_stop", "change_trip", "replan_remaining", "none"]);
 
 export const liveUpdateSchema = (stopIds: [string, ...string[]]) =>
   z.strictObject({
@@ -131,6 +134,12 @@ export const liveUpdateSchema = (stopIds: [string, ...string[]]) =>
     request: z.string().nullable(),
     /** Reply for kind "none" (questions, chit-chat). */
     reply: z.string().nullable(),
+    /** change_trip: days to add to the trip (negative to cut it short). */
+    extraDays: z.int().nullable().default(null),
+    /** change_trip: a new destination, as "City, ST" when it's in the US. */
+    newDestination: z.string().nullable().default(null),
+    /** change_trip: whether newDestination is in the United States. */
+    destinationInUsa: z.boolean().nullable().default(null),
   });
 export type LiveUpdate = z.infer<ReturnType<typeof liveUpdateSchema>>;
 

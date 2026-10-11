@@ -1,15 +1,18 @@
 import { access } from "node:fs/promises";
 import { resolve } from "node:path";
 import { diffItineraries, formatDiff } from "../../domain/diff";
+import { option } from "../../domain/reconcile";
 import { currentStopIndex, finalizeItinerary, shiftSchedule } from "../../domain/schedule";
-import { formatTime } from "../../domain/time";
-import { type Itinerary, type LiveUpdate, liveUpdateSchema, type Trip } from "../../schemas";
+import { KEEP_CURRENT } from "../../domain/tally";
+import { addDays, daysBetween, formatLocalDate, formatTime } from "../../domain/time";
+import { type Itinerary, type LiveUpdate, liveUpdateSchema, Place, type Trip } from "../../schemas";
 import { LlmError } from "../../services/llm";
 import { PlanningError } from "../../services/planner";
 import { conversationBlock, itineraryBlock, SYSTEM } from "../../services/prompts";
 import { copy, VIBES, type Vibe } from "../copy";
 import type { Ctx, Engine } from "../engine";
 import { interpretPhoto, stopRequestFor } from "./photo";
+import { sendPoll } from "./voting";
 
 /**
  * The first itinerary is in and the trip starts: each member gets "✅ Itinerary ready!", the dashboard
@@ -117,6 +120,8 @@ export async function handle(e: Engine, ctx: Ctx): Promise<void> {
         return await replaceStop(e, ctx, itinerary, intent);
       case "add_stop":
         return await addStop(e, ctx, itinerary, intent.request ?? ctx.msg.text);
+      case "change_trip":
+        return await proposeChange(e, ctx, intent);
       case "replan_remaining":
         return await replanRemaining(e, ctx, itinerary, intent.request ?? ctx.msg.text);
       case "none":
@@ -174,7 +179,6 @@ async function replaceStop(e: Engine, ctx: Ctx, itinerary: Itinerary, intent: Li
 export async function photoStop(e: Engine, ctx: Ctx): Promise<void> {
   const itinerary = await e.currentItinerary(ctx.trip);
   if (!itinerary || !ctx.trip.resolved) return;
-  await e.reply(ctx, copy.photoLooking());
   let reading: Awaited<ReturnType<typeof interpretPhoto>>;
   try {
     reading = await interpretPhoto(e, ctx, `${itinerary.startLocation} → ${itinerary.endLocation}`);
@@ -211,6 +215,58 @@ async function addStop(e: Engine, ctx: Ctx, itinerary: Itinerary, request: strin
   await publish(e, ctx, itinerary, next, `added ${stop.name} (${when}).`);
 }
 
+/** Longest trip the planner handles (itinerary days are 1–14). */
+const MAX_TRIP_DAYS = 14;
+
+/**
+ * "Can we add an extra day?" / "let's go to Charleston instead" on the road: the trip's dates or
+ * destination are the group's call, so the trip goes back to a quick vote (Yes / keep the current plan;
+ * a tie keeps it). Trips stay in the US.
+ */
+async function proposeChange(e: Engine, ctx: Ctx, intent: LiveUpdate): Promise<void> {
+  const resolved = ctx.trip.resolved as NonNullable<Trip["resolved"]>;
+  if (intent.newDestination && intent.destinationInUsa === false) return void (await e.reply(ctx, copy.usaOnly(null)));
+  const destination = intent.newDestination ? Place.safeParse(intent.newDestination.trim()) : null;
+  const endLocation = destination?.success && destination.data !== resolved.endLocation ? destination.data : null;
+  const extra = intent.extraDays ?? 0;
+  const endDate = extra ? addDays(resolved.endDate, extra) : null;
+  if (!endDate && !endLocation) return void (await e.reply(ctx, copy.changeUnclear()));
+  if (endDate) {
+    const today = e.todayIn(ctx.trip.timeZone);
+    if (endDate < resolved.startDate || endDate < today)
+      return void (await e.reply(ctx, copy.couldNot("the trip can't end before it starts or in the past")));
+    if (daysBetween(resolved.startDate, endDate) + 1 > MAX_TRIP_DAYS)
+      return void (await e.reply(ctx, copy.tripTooLong()));
+  }
+  const days = Math.abs(extra);
+  const parts = [
+    endDate
+      ? `${extra > 0 ? "add" : "cut"} ${days} day${days === 1 ? "" : "s"} (ends ${formatLocalDate(endDate)})`
+      : null,
+    endLocation ? `go to ${endLocation} instead` : null,
+  ].filter(Boolean);
+  const summary = parts.join(" and ");
+  if (!(await e.repo.transition(ctx.trip.id, "execution", "voting"))) return;
+  const [poll] = await e.repo.createPolls([
+    {
+      tripId: ctx.trip.id,
+      kind: "itinerary",
+      question: copy.changeQuestion(summary),
+      status: "open",
+      round: 1,
+      options: [
+        option(copy.changeYes(summary), {
+          kind: "itinerary",
+          instruction: `The group voted to ${summary}. Re-plan the rest of the trip for that; keep the stops already visited unchanged.`,
+          tripChange: { endDate, endLocation },
+        }),
+        option(copy.changeNo(), { kind: "itinerary", instruction: KEEP_CURRENT }),
+      ],
+    },
+  ]);
+  if (poll) await sendPoll(e, poll, false);
+}
+
 async function replanRemaining(e: Engine, ctx: Ctx, itinerary: Itinerary, request: string): Promise<void> {
   await e.reply(ctx, copy.working());
   const next = await e.planner.draft({
@@ -222,6 +278,9 @@ async function replanRemaining(e: Engine, ctx: Ctx, itinerary: Itinerary, reques
     memberCount: itinerary.sustainability.memberCount,
     revision: { previous: itinerary, instruction: `${request} (Keep the stops already visited unchanged.)` },
   });
+  // A re-plan that drops every stop isn't a plan (it's how "I don't want to go anymore" once emptied a trip).
+  const planned = (it: Itinerary) => it.stops.filter((s) => s.kind !== "origin" && !s.name.startsWith("Home")).length;
+  if (planned(itinerary) > 1 && planned(next) <= 1) throw new PlanningError(copy.replanEmptied());
   await publish(e, ctx, itinerary, next, "updated the rest of the plan.");
 }
 

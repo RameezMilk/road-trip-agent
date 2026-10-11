@@ -153,3 +153,38 @@ export function refersToPhoto(input: string): boolean {
     /^(?:this|that|these|here|look|see)(?:\s|[!.]|👀|👆|⬆️)*$/u.test(text)
   );
 }
+
+/**
+ * "I don't want to go on the trip anymore", "count me out", "I'm out": the member wants to leave the trip.
+ * Anchored so planning answers like "I don't want to go to the beach" aren't caught.
+ */
+export function wantsToLeave(input: string): boolean {
+  const text = input.trim().toLowerCase().replace(/[’]/g, "'");
+  return (
+    /^(?:i\s+)?(?:don'?t|do not|no longer)\s+want\s+to\s+(?:go|come)(?:\s+on\s+(?:the|this)\s+trip)?(?:\s+any\s?more)?[\s.!😢😔]*$/u.test(
+      text,
+    ) ||
+    /^(?:i'?m|i am)\s+(?:out|not (?:going|coming))(?:\s+any\s?more)?[\s.!]*$/.test(text) ||
+    /\b(?:count me out|i want to leave(?: the trip)?|i'?m leaving the trip|take me off (?:the|this) trip|i can'?t make it (?:any\s?more|after all))\b/.test(
+      text,
+    )
+  );
+}
+
+/**
+ * "Where does Rameez wanna go?", "what did everyone pick?": asking about the others' answers, which stay
+ * private until the vote.
+ */
+export function asksAboutOthers(input: string): boolean {
+  const text = input.trim().toLowerCase().replace(/[’]/g, "'");
+  if (!/^(?:where|what|when|which|how much)\b/.test(text)) return false;
+  return (
+    /\b(?:does|do|did|is|are|was|were|has|have)\s+(?!i\b|we\b|you\b)[\w']+(?:\s+[\w']+)?\s+(?:want|wanna|pick|picked|choose|chose|say|said|going|prefer|budget|answer)/.test(
+      text,
+    ) ||
+    /\b(?:everyone|everybody|the others|others|they)\b.*\b(?:want|wanna|pick|picked|chose|said|going|budget)\b/.test(
+      text,
+    ) ||
+    /\b[\w]+'s\s+(?:pick|answer|budget|destination|dates)\b/.test(text)
+  );
+}

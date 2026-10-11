@@ -96,7 +96,9 @@ export async function sweep(e: Engine, tripId: string): Promise<void> {
   const trip = await e.repo.getTrip(tripId);
   if (!trip) return;
   const steps = await owedSteps(e, trip);
-  if (!steps) return;
+  // Only when someone is actually waiting on them ("Rameez is waiting on you…"): a host alone in a new
+  // trip, or a vote nobody has answered yet, isn't worth a nudge.
+  if (!steps || steps.done.length === 0) return;
   const states = await e.repo.reminderState(trip.id, steps.windowStart);
   const now = e.clock();
 

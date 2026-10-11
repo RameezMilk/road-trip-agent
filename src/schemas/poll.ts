@@ -17,7 +17,12 @@ export const PollOptionValue = z.discriminatedUnion("kind", [
     requirementIds: z.array(RequirementId).max(20),
     resolution: z.string().min(1).max(200),
   }),
-  z.strictObject({ kind: z.literal("itinerary"), instruction: z.string().min(1).max(500) }),
+  z.strictObject({
+    kind: z.literal("itinerary"),
+    instruction: z.string().min(1).max(500),
+    /** A change to the trip's dates or destination, proposed on the road and applied if this option wins. */
+    tripChange: z.strictObject({ endDate: LocalDate.nullable(), endLocation: Place.nullable() }).optional(),
+  }),
   z.strictObject({ kind: z.literal("abstain") }),
 ]);
 export type PollOptionValue = z.infer<typeof PollOptionValue>;

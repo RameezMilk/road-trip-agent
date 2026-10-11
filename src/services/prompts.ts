@@ -31,7 +31,10 @@ If nothing conflicts, return polls: [].`,
 
   placeCanonicalization: `Normalize the start and end of a US road trip exactly as a traveler typed them.
 Return each as "City, ST" (two-letter state code), or "Place name, City, ST" for a specific spot. Fix misspellings.
-If a place is ambiguous, pick the most likely one given the other end (it's a drivable road trip).`,
+If a place is ambiguous, pick the most likely one given the other end (it's a drivable road trip); if it's still
+ambiguous, prefer North Carolina (e.g. "Wilmington" → "Wilmington, NC").
+These road trips are US-only: set startInUsa / endInUsa to false for a place outside the United States
+(e.g. "Toronto", "Islamabad"), and still return its name as typed.`,
 
   voteMapping: `Map a voter's free-text reply to the closest poll option id.
 Return null if the reply does not express a preference among the options.`,
@@ -69,6 +72,10 @@ conversation yet ("add something like this" before the picture); then the other 
 - "delay": they are running late or stayed longer somewhere. delayMinutes if stated (else null), stopId = the stop where they are delayed (usually the current stop).
 - "replace_stop": swap one specific planned stop for something else. stopId + request (what they want instead).
 - "add_stop": add one new stop without dropping any (a named place, or a kind of place). request: what to add, with its city if stated.
+- "change_trip": change the trip's dates or destination ("add an extra day", "let's go to Charleston instead",
+  "drive to Islamabad"). extraDays: days to add (negative to cut short), else null. newDestination: the new
+  destination as "City, ST" if in the US, else as written; null if unchanged. destinationInUsa: false if that
+  destination is outside the United States.
 - "replan_remaining": a broader change to the rest of the plan. request.
 - "none": a question or chit-chat. reply: a short helpful answer based on the itinerary.
 If the message answers the agent's previous question in the recent conversation, combine them into one intent

@@ -10,7 +10,8 @@ export const TripPhase = z.enum(["onboarding", "planning", "voting", "drafting",
 export type TripPhase = z.infer<typeof TripPhase>;
 
 export const MemberRole = z.enum(["host", "member"]);
-export const MemberStatus = z.enum(["invited", "joined"]);
+/** `left`: was in the trip and left it; no longer counted anywhere (votes, answers, approvals, reminders). */
+export const MemberStatus = z.enum(["invited", "joined", "left"]);
 
 /** What `edit()` needs to update a live app card after a restart (Spectrum's `miniAppCardSession`). */
 export const CardRef = z.strictObject({
