@@ -25,6 +25,14 @@ const envSchema = z.object({
   VEHICLE_MPG: withDefault(z.coerce.number().positive().max(200), 30),
   GAS_PRICE_USD_PER_GALLON: withDefault(z.coerce.number().positive().max(20), 3.2),
   MIN_MEMBERS: withDefault(z.coerce.number().int().min(1).max(10), 2),
+  /**
+   * Photon card style. `false` (default): a normal bubble that opens the mini-app in iMessage's expanded,
+   * near-full-screen view when tapped. `true`: a live card rendered inline in the thread (bubble-sized).
+   */
+  CARD_LIVE: withDefault(
+    z.enum(["true", "false"]).transform((v) => v === "true"),
+    "false",
+  ),
   NOMINATIM_URL: withDefault(z.url(), "https://nominatim.openstreetmap.org"),
   OSRM_URL: withDefault(z.url(), "https://router.project-osrm.org"),
   /** Nominatim's usage policy requires an identifying User-Agent. */

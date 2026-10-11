@@ -42,6 +42,7 @@ export class SpectrumChat implements ChatPort {
     private readonly spectrum: Awaited<ReturnType<typeof Spectrum>>,
     private readonly repo: Repo,
     private readonly log: Log,
+    private readonly cardLive: boolean,
   ) {}
 
   static async connect(options: {
@@ -49,6 +50,8 @@ export class SpectrumChat implements ChatPort {
     projectSecret: string;
     repo: Repo;
     log: Log;
+    /** Live cards render inline (bubble-sized); non-live cards open the expanded mini-app when tapped. */
+    cardLive: boolean;
   }): Promise<SpectrumChat> {
     const spectrum = await Spectrum({
       projectId: options.projectId,
@@ -56,7 +59,7 @@ export class SpectrumChat implements ChatPort {
       providers: [imessage.config()],
     });
     options.log("spectrum_connected", { project: spectrum.config.slug });
-    return new SpectrumChat(spectrum, options.repo, options.log);
+    return new SpectrumChat(spectrum, options.repo, options.log, options.cardLive);
   }
 
   /** Inbound messages only, deduped in memory (the DB insert is the durable dedupe). */
@@ -114,7 +117,7 @@ export class SpectrumChat implements ChatPort {
   }
 
   async sendCard(to: Recipient, url: string, layout: CardLayout): Promise<CardRef | null> {
-    const sent = await this.send(to, app(url, { live: true, layout }));
+    const sent = await this.send(to, app(url, { live: this.cardLive, layout }));
     await this.recordOutbound(to, sent, "app", null, { url, ...layout });
     const session = (sent as { miniAppCardSession?: Record<string, unknown> } | undefined)?.miniAppCardSession;
     return sent && session ? { messageId: sent.id, session: { ...session } } : null;
@@ -136,7 +139,7 @@ export class SpectrumChat implements ChatPort {
       timestamp: new Date(),
       miniAppCardSession: { ...card.session },
     };
-    await space.edit(target as unknown as Message, app(url, { live: true, layout }));
+    await space.edit(target as unknown as Message, app(url, { live: this.cardLive, layout }));
     await this.recordOutbound(to, undefined, "app_edit", null, { url, ...layout, editOf: card.messageId });
     return { messageId: card.messageId, session: { ...target.miniAppCardSession } };
   }

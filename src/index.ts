@@ -50,6 +50,7 @@ if (config.SPECTRUM_PROJECT_ID && config.SPECTRUM_PROJECT_SECRET) {
     projectSecret: config.SPECTRUM_PROJECT_SECRET,
     repo,
     log,
+    cardLive: config.CARD_LIVE,
   });
 } else {
   log("spectrum_not_configured", { note: "HTTP only — set SPECTRUM_PROJECT_ID/SECRET to run the agent" });

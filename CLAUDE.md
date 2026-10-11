@@ -77,9 +77,9 @@ Never move it to serverless or edge, because the stream must stay connected.
   - `/poll/:token` and `GET/POST /api/polls/:token` serve the poll widget.
   - `/web/*` serves static files.
 - **`web/`** is plain HTML/CSS/JS in Frutiger Aero style, with Leaflet 1.9.4 from cdnjs and OSM tiles:
-  - The layout is fixed and only `.scroll` scrolls; otherwise the card webview scrolls the conversation.
-  - Under 120 px tall (the in-thread bubble) it shows a one-line summary only.
-  - At `max-height: 360px` (the ~280×300 opened card) the chrome is tighter.
+  - The dashboard has four touch-sized **tabs**: 🗺️ Map · 📋 Schedule · 🌱 Impact · 👥 Trip. Each fills the screen. Tapping a stop switches to Map and opens that stop's popup.
+  - The page never scrolls. Only the active tab scrolls, **vertically only** (`overflow-x: hidden`, `touch-action: pan-y`, `minmax(0,1fr)` grids).
+  - Under 120 px tall (an inline live bubble) it shows a one-line summary only.
 
 ### Conversation flow (each member in their own DM)
 
@@ -123,6 +123,8 @@ Never move it to serverless or edge, because the stream must stay connected.
   - Skip `direction: "outbound"`. Our own sends don't come back on the stream, so `SpectrumChat` records them.
   - Card edits need the original send's `miniAppCardSession`, which the provider **replaces on every edit**. We store `{messageId, session}` on the member (`members.card`), rebuild a minimal outbound target to edit, and save the new session. If the edit fails, we send a new card.
   - Pass `layout` to `app()` so Photon doesn't fetch OG metadata through ngrok.
+  - **Cards are sent non-live by default (`CARD_LIVE=false`).** A live card (`app(url,{live:true})`) renders the page *inline* in the thread at about reply-bubble size, and the first live test showed it was far too cramped. A non-live card is a normal bubble that should open the mini-app in iMessage's expanded, near-full-screen view when tapped.
+  - Free ngrok domains show a "You are about to visit…" page to browsers first. Tap **Visit Site** once.
 - **Identity and privacy:**
   - Card pages carry no identity. The dashboard is read-only and keyed by an unguessable `publicId`, and `TripDashboard` exposes first names and aggregates only: no handles, no per-person requirements, no who-voted-what.
   - Poll-widget links carry a per-(poll, member) token that is only ever sent in that member's own DM.
@@ -138,6 +140,7 @@ Never move it to serverless or edge, because the stream must stay connected.
   - OSRM's public demo server is for light use.
   - Tiles need OSM attribution, which is already shown.
 - **Gemini:**
+  - Gemini returns HTTP 400 for `minItems`/`maxItems` on nested arrays, so `toLlmJsonSchema` strips them and Zod enforces them after parsing.
   - Structured output combined with the Google Search tool is a **Gemini 3** feature. Keep `GEMINI_MODEL` on a Gemini 3 model (default `gemini-3.8-flash`).
   - Use the Interactions API (`client.interactions.create`, read `output_text`).
 - **Out of scope:** bookings, payments, background GPS, calendars, social scraping, Snowflake (per the pitch), voice and images.
@@ -162,4 +165,5 @@ Never move it to serverless or edge, because the stream must stay connected.
 | 14 | (unspecified) | Planning starts once at least `MIN_MEMBERS` (default 2) people have joined | Stops a host's early `ready` from launching a solo trip. Set it to 1 for solo testing. |
 | 15 | Dashboard only after everyone approves | The card is sent to everyone on full approval, as specified, but `dashboard` also works during review as a preview | Lets the group see the map while they decide, without changing the approval flow. |
 | 16 | Requirements gathered by the "Planning Phase" | Mid-planning corrections ("actually change my budget to 300") are re-extracted and re-validated | People change their minds, and the predefined schema stays authoritative. |
+| 18 | Dashboard layout: map, schedule widget and sustainability icons | A tabbed dashboard (Map / Schedule / Impact / Trip), opened from a **non-live** Photon card, plus an "Open full screen" link in the Trip tab | The live test showed an inline live card is reply-bubble sized: components were cramped, the schedule scrolled sideways, and the sustainability bars were out of reach. |
 | 17 | Gemini drafts the itinerary with web search | At most 12 stops. Stops Nominatim can't find fall back to "name, city", then to the town centre (marked "approx." on the map), then are dropped and listed. | OSM geocoding of businesses is imperfect. Showing what was approximated or dropped is better than inventing coordinates. |

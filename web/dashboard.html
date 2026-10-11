@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
     <meta name="theme-color" content="#7cc8ef">
     <!--OG-->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
@@ -19,9 +19,30 @@
         </div>
         <span class="badge" id="badge" hidden></span>
       </header>
-      <section class="map-wrap glass" aria-label="Trip map"><div id="map"></div></section>
-      <main class="scroll glass" id="panel">
-        <p class="notice" id="notice">Loading…</p>
+      <div class="tabs glass" role="tablist" aria-label="Dashboard sections">
+        <button class="tab" role="tab" id="tab-map" aria-controls="pane-map" data-tab="map" type="button">
+          <span class="ico" aria-hidden="true">🗺️</span>Map
+        </button>
+        <button class="tab" role="tab" id="tab-schedule" aria-controls="pane-schedule" data-tab="schedule" type="button">
+          <span class="ico" aria-hidden="true">📋</span>Schedule
+        </button>
+        <button class="tab" role="tab" id="tab-impact" aria-controls="pane-impact" data-tab="impact" type="button">
+          <span class="ico" aria-hidden="true">🌱</span>Impact
+        </button>
+        <button class="tab" role="tab" id="tab-trip" aria-controls="pane-trip" data-tab="trip" type="button">
+          <span class="ico" aria-hidden="true">👥</span>Trip
+        </button>
+      </div>
+      <main class="stage glass">
+        <section class="pane map-pane" id="pane-map" role="tabpanel" aria-labelledby="tab-map">
+          <div id="map"></div>
+          <div class="map-chip" id="map-chip" hidden></div>
+        </section>
+        <section class="pane scroll" id="pane-schedule" role="tabpanel" aria-labelledby="tab-schedule">
+          <p class="notice">Loading…</p>
+        </section>
+        <section class="pane scroll" id="pane-impact" role="tabpanel" aria-labelledby="tab-impact"></section>
+        <section class="pane scroll" id="pane-trip" role="tabpanel" aria-labelledby="tab-trip"></section>
       </main>
     </div>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>

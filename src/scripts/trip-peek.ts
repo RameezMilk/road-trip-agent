@@ -14,7 +14,7 @@ if (!row) {
 } else {
   const trip = await repo.getTrip(row.id);
   console.log(`trip ${row.title} · phase=${row.phase} · v${row.currentVersion} · dashboard=/trip/${row.publicId}`);
-  const it = trip && trip.currentVersion ? await repo.getItinerary(trip.id, trip.currentVersion) : null;
+  const it = trip?.currentVersion ? await repo.getItinerary(trip.id, trip.currentVersion) : null;
   if (it) {
     for (const s of it.stops) {
       console.log(
