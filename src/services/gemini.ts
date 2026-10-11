@@ -72,7 +72,7 @@ export class GeminiLlm implements Llm {
   private parse<T>(request: LlmRequest<T>, text: string): { ok: true; value: T } | { ok: false; issues: string } {
     let json: unknown;
     try {
-      json = JSON.parse(text.replace(/^```(?:json)?\s*|\s*```$/g, ""));
+      json = decodeEntitiesDeep(JSON.parse(text.replace(/^```(?:json)?\s*|\s*```$/g, "")));
     } catch {
       return { ok: false, issues: "not valid JSON" };
     }
@@ -90,4 +90,28 @@ export class GeminiLlm implements Llm {
   private wrap<T>(request: LlmRequest<T>, error: unknown): Error {
     return error instanceof LlmError ? error : new LlmError(request.task, String(error));
   }
+}
+
+const ENTITIES: Record<string, string> = {
+  "&amp;": "&",
+  "&lt;": "<",
+  "&gt;": ">",
+  "&quot;": '"',
+  "&#39;": "'",
+  "&apos;": "'",
+};
+
+/** Gemini sometimes HTML-escapes text inside JSON ("Waterfall &amp; Halal"); undo that in every string. */
+export function decodeEntitiesDeep(value: unknown): unknown {
+  if (typeof value === "string") {
+    return value
+      .replace(/&#x([0-9a-f]+);/gi, (_, hex: string) => String.fromCodePoint(Number.parseInt(hex, 16)))
+      .replace(/&#(\d+);/g, (_, dec: string) => String.fromCodePoint(Number(dec)))
+      .replace(/&(amp|lt|gt|quot|apos|#39);/g, (m) => ENTITIES[m] ?? m);
+  }
+  if (Array.isArray(value)) return value.map(decodeEntitiesDeep);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, decodeEntitiesDeep(v)]));
+  }
+  return value;
 }
