@@ -126,9 +126,24 @@ export type LiveUpdate = z.infer<ReturnType<typeof liveUpdateSchema>>;
 export const ReplacementStop = z.strictObject({ stop: DraftStop, summary: z.string() });
 export type ReplacementStop = z.infer<typeof ReplacementStop>;
 
-/** JSON Schema for Gemini's `response_format.schema`. */
+/**
+ * JSON Schema for Gemini's `response_format.schema`. Array-length bounds (`minItems`/`maxItems`) are
+ * stripped: Gemini rejects them on nested arrays (HTTP 400, seen live on ItineraryDraft). Zod still
+ * enforces every bound on the parsed result, so an over-long answer fails validation and is repaired.
+ */
 export function toLlmJsonSchema(schema: z.ZodType): Record<string, unknown> {
   const json = z.toJSONSchema(schema, { target: "draft-2020-12", unrepresentable: "throw" }) as Record<string, unknown>;
   delete json.$schema;
-  return json;
+  return stripArrayBounds(json) as Record<string, unknown>;
+}
+
+function stripArrayBounds(node: unknown): unknown {
+  if (Array.isArray(node)) return node.map(stripArrayBounds);
+  if (node === null || typeof node !== "object") return node;
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(node)) {
+    if (key === "minItems" || key === "maxItems") continue;
+    out[key] = stripArrayBounds(value);
+  }
+  return out;
 }

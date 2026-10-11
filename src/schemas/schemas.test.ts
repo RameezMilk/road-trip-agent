@@ -81,6 +81,7 @@ describe("LLM schemas stay inside Gemini's JSON-schema subset", () => {
       expect(json).not.toContain("$ref");
       expect(json).not.toContain('"pattern"');
       expect(json).not.toContain("$schema");
+      expect(json).not.toMatch(/"(minItems|maxItems)"/);
     });
   }
 
