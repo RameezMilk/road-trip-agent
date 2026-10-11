@@ -9,10 +9,138 @@ An iMessage road-trip agent for HackNC 2026 (Devpost due 10:00 AM ET, Oct 11 202
 - The agent collects everyone's requirements and runs votes only where people differ.
 - It drafts an itinerary with Gemini and web search, then iterates on it from natural-language feedback.
 - When everyone approves, it sends a Photon mini-app dashboard with a map, a schedule and sustainability bars.
+- On the road, it re-plans live from messages like "we're 30 min late" or "sushi instead of pizza".
 
-`dev/mvp` was started fresh from `main`. The earlier `dev/initial-scratch` branch (the Photon capability probe and spec-era scaffold) is **reference only** and is never merged.
+`dev/mvp` was started fresh from `main`. The earlier `dev/initial-scratch` branch (the Photon capability probe and spec-era scaffold) is **reference only** and is never merged. Its probe findings are summarized under "Rules" below.
 
-**Status:** building the MVP. This file is completed at the end of the build.
+**Status:** MVP built and tested offline (fakes plus PGlite). Live use needs `GEMINI_API_KEY` and a Tiger Data `DATABASE_URL` in `.env`.
+
+## Commands
+
+```sh
+npm install
+npm run dev            # agent + HTTP on :8787 (tsx watch). Needs DATABASE_URL; runs migrations on boot
+npm start              # same, without watch
+npm run dev:demo       # dashboard + poll widget for a seeded, visibly labeled DEMO DATA trip (in-memory PGlite, no keys)
+npm run db:migrate     # apply drizzle/* to Tiger Data (boot also does this)
+npm run db:generate    # regenerate SQL after editing src/db/schema.ts (offline)
+npm run db:tail -- --limit 50   # latest chat_events rows (handles shown as last 4 digits)
+npm run llm:smoke      # one structured + one Google-Search-grounded Gemini call (checks key + model)
+npm run typecheck && npm run lint && npm test
+npx vitest run src/agent/engine.test.ts -t "aborts"   # single test
+```
+
+Cards need public HTTPS. Run `ngrok http 8787` and put the URL in `PUBLIC_BASE_URL`. Scripts load `.env` via `tsx --env-file-if-exists=.env`.
+
+## Architecture
+
+Single package: ESM TypeScript on Node 24, with TypeScript pinned to 6.x because spectrum-ts's peer range excludes 7. **One long-lived process** holds:
+- the Spectrum gRPC stream,
+- the Hono HTTP server,
+- the static `web/` pages.
+
+Never move it to serverless or edge, because the stream must stay connected.
+
+- **`src/schemas/`** holds every contract as a Zod 4 `z.strictObject`:
+  - Unknown keys are rejected, timestamps carry an offset, units are in field names, and IDs are prefixed (`trip_`, `mem_`, `req_`, `poll_`, `opt_`, `stop_`, `evt_`).
+  - Commands are a Zod enum plus a discriminated union (`chat-command.ts`). Never compare raw strings like `"ready"`.
+  - `llm.ts` holds the **flat** schemas Gemini fills. Gemini's JSON-schema subset rejects `oneOf`, so there are no discriminated unions, regexes or refinements, and a test enforces this.
+- **`src/agent/`**:
+  - `engine.ts` dispatches each DM by trip phase to `phases/*`.
+  - All state is in the DB, and handlers re-read what they need.
+  - `KeyedQueue` serializes work per trip. `runtime.ts` additionally serializes per sender.
+  - Phase changes are compare-and-set (`repo.transition(from, to)`).
+  - Drafting runs **outside** the queue (`Engine.startDraftJob`), then commits back through it. On boot, `resumeDrafting()` restarts trips stuck in `drafting`.
+  - Every user-facing string is in `copy.ts`.
+- **`src/domain/`** holds pure, unit-tested logic:
+  - `reconcile` compares requirements and builds polls.
+  - `tally` picks the winner and handles revotes and tiebreaks.
+  - `schedule` computes times, `shiftSchedule` and `rescheduleFrom`.
+  - `sustainability`, `diff`, and `time` (time-zone math with no library).
+- **`src/services/`**:
+  - `Llm` port, implemented by `GeminiLlm`. It uses the Interactions API with `store:false` and a JSON `response_format`, plus the Google Search tool when `webSearch`. Results are Zod-validated with one repair retry, and the grounded-text-then-structured fallback is used if the combination fails.
+  - `NominatimGeocoder`: 1 req/s, identifying User-Agent, cached.
+  - `OsrmRouter`: one multi-waypoint call, with a haversine fallback labeled `estimate`.
+  - `Planner`: Gemini picks places, OSM locates them, and code computes every number.
+- **`src/chat/`**:
+  - `ChatPort` is the provider-neutral boundary.
+  - `spectrum.ts` is the **only** importer of `spectrum-ts`. It maps the stream, sends text and cards, edits cards in place, and records every outbound message to `chat_events`.
+  - `commands.ts` parses text into `ChatCommand`.
+- **`src/db/`**:
+  - Drizzle over postgres-js against Tiger Data, the only operational store.
+  - Tables: `trips`, `members`, `predefined_requirements` (one row per member, real columns), `optional_requirements`, `polls`, `poll_votes`, `poll_tokens`, `itinerary_versions` (jsonb `Itinerary`), and `approvals`.
+  - `chat_events` and `trip_events` are TimescaleDB hypertables. The migration `drizzle/0001_hypertables.sql` is a no-op without TimescaleDB.
+  - `repo.ts` re-parses jsonb through Zod on read. Tests use `createMemoryDb()` (PGlite, real migrations).
+- **`src/http/app.ts`** routes:
+  - `GET /api/trips/:publicId` returns `TripDashboard`.
+  - `/trip/:publicId` serves the dashboard page with OG tags.
+  - `/poll/:token` and `GET/POST /api/polls/:token` serve the poll widget.
+  - `/web/*` serves static files.
+- **`web/`** is plain HTML/CSS/JS in Frutiger Aero style, with Leaflet 1.9.4 from cdnjs and OSM tiles:
+  - The layout is fixed and only `.scroll` scrolls; otherwise the card webview scrolls the conversation.
+  - Under 120 px tall (the in-thread bubble) it shows a one-line summary only.
+  - At `max-height: 360px` (the ~280×300 opened card) the chrome is tighter.
+
+### Conversation flow (each member in their own DM)
+
+1. **Onboarding:**
+   - `newtrip`, then the host's name.
+   - `invite +1…` DMs each invitee, or friends use `join CODE`.
+   - `join`, then the member's name.
+   - Everyone sends `ready`. Planning needs at least `MIN_MEMBERS` joined and no pending invites.
+2. **Planning:** each member answers the 7 predefined fields one by one.
+   - Simple answers are parsed deterministically first, and Gemini `PredefinedExtraction` handles the rest.
+   - Optional wishes come next, through `OptionalExtraction`. Then `ready`.
+3. **Voting:**
+   - Reconcile first: budget becomes the minimum and dietary restrictions are unioned.
+   - Then route and dates polls run, only where members differ, one open poll at a time.
+   - A vote is a number, or free text mapped by Gemini `VoteMapping`, or the widget.
+   - A tie gets a revote. A predefined poll still tied after the revote **aborts** the trip.
+   - Gemini `ConflictAnalysis` then adopts compatible wishes and creates at most 3 bundled polls for real conflicts.
+4. **Drafting:** Gemini with Google Search produces `ItineraryDraft`, then geocode, then OSRM, then the deterministic schedule.
+5. **Review:** `approve`, or feedback that Gemini `FeedbackAssessment` classifies:
+   - **minor**: auto-replan, approvals carry over;
+   - **material**: new version, everyone re-approves;
+   - **conflicting**: an itinerary poll with a "keep current plan" option.
+
+   Each version is announced with a deterministic diff. When everyone approves, the trip moves to execution and each member gets the dashboard card.
+6. **Execution:** Gemini `LiveUpdate` classifies the message:
+   - `delay` runs `shiftSchedule` for the same day;
+   - `replace_stop` runs `Planner.replaceStop`;
+   - `replan_remaining` re-drafts the rest.
+
+   Changes apply immediately, everyone is told, and cards are edited in place.
+
+`help`, `status`, `dashboard` and `cancel` (host only) work in every phase.
+
+## Rules that aren't obvious from the code
+
+- **Photon Spectrum (Pro plan), proved by the probe on `dev/initial-scratch`:**
+  - Each person DMs their own agent number, and **group chats deliver no events**.
+  - The agent can DM registered users first. Numbers not added in the Photon dashboard fail with "Target not allowed"; `invite` reports this and removes the invite.
+  - **Native poll votes never arrive.** Don't use `poll()`.
+  - Delivery is at-least-once. The `chat_events` insert is the durable dedupe, and `SpectrumChat` keeps an in-memory set.
+  - Skip `direction: "outbound"`. Our own sends don't come back on the stream, so `SpectrumChat` records them.
+  - Card edits need the original send's `miniAppCardSession`, which the provider **replaces on every edit**. We store `{messageId, session}` on the member (`members.card`), rebuild a minimal outbound target to edit, and save the new session. If the edit fails, we send a new card.
+  - Pass `layout` to `app()` so Photon doesn't fetch OG metadata through ngrok.
+- **Identity and privacy:**
+  - Card pages carry no identity. The dashboard is read-only and keyed by an unguessable `publicId`, and `TripDashboard` exposes first names and aggregates only: no handles, no per-person requirements, no who-voted-what.
+  - Poll-widget links carry a per-(poll, member) token that is only ever sent in that member's own DM.
+  - Polls never say who proposed an option.
+- **LLM output is untrusted:**
+  - Everything goes through Zod.
+  - Gemini may reference only the IDs it was given (a per-call `z.enum`).
+  - Distances, times, fuel and CO₂ come from OSRM and code, never from Gemini. Gemini's per-stop prices are shown labeled "Gemini web estimate".
+  - Without `GEMINI_API_KEY`, every Gemini step fails with a clear message. **Never** a silent fixture.
+  - The only fixtures are in `src/testing/` (tests) and `npm run dev:demo`, whose trip is titled "DEMO DATA".
+- **OSM usage policies:**
+  - Nominatim allows at most 1 request per second, needs an identifying `GEO_USER_AGENT`, and results are cached.
+  - OSRM's public demo server is for light use.
+  - Tiles need OSM attribution, which is already shown.
+- **Gemini:**
+  - Structured output combined with the Google Search tool is a **Gemini 3** feature. Keep `GEMINI_MODEL` on a Gemini 3 model (default `gemini-3.8-flash`).
+  - Use the Interactions API (`client.interactions.create`, read `output_text`).
+- **Out of scope:** bookings, payments, background GPS, calendars, social scraping, Snowflake (per the pitch), voice and images.
 
 ## Deviations from the owner's pitch / data flow / user flow
 
@@ -32,3 +160,6 @@ An iMessage road-trip agent for HackNC 2026 (Devpost due 10:00 AM ET, Oct 11 202
 | 12 | (unspecified) | Each member's first name is captured when they join | Polls, status messages and the dashboard show first names, never phone numbers. |
 | 13 | (unspecified) | Text messages only. Voice, images and attachments get a "text only for now" reply. | Keeps the MVP small. Voice notes would need to be transcoded first. |
 | 14 | (unspecified) | Planning starts once at least `MIN_MEMBERS` (default 2) people have joined | Stops a host's early `ready` from launching a solo trip. Set it to 1 for solo testing. |
+| 15 | Dashboard only after everyone approves | The card is sent to everyone on full approval, as specified, but `dashboard` also works during review as a preview | Lets the group see the map while they decide, without changing the approval flow. |
+| 16 | Requirements gathered by the "Planning Phase" | Mid-planning corrections ("actually change my budget to 300") are re-extracted and re-validated | People change their minds, and the predefined schema stays authoritative. |
+| 17 | Gemini drafts the itinerary with web search | At most 12 stops. Stops Nominatim can't find fall back to "name, city", then to the town centre (marked "approx." on the map), then are dropped and listed. | OSM geocoding of businesses is imperfect. Showing what was approximated or dropped is better than inventing coordinates. |
