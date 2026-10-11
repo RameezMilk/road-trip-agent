@@ -173,3 +173,33 @@ export function shiftSchedule(itinerary: Itinerary, stopId: string, minutes: num
     return shifted;
   });
 }
+
+/**
+ * Re-times stops from `fromIndex` on, chaining from the previous stop's (possibly delayed) departure.
+ * Overnight departures keep their next-morning time unless the group arrives later than that.
+ */
+export function rescheduleFrom(
+  stops: Array<ItineraryStop>,
+  legs: RouteLeg[],
+  fromIndex: number,
+  timeZone: string,
+): ItineraryStop[] {
+  const out = stops.map((s) => ({ ...s }));
+  for (let i = Math.max(1, fromIndex); i < out.length; i++) {
+    const prev = out[i - 1] as ItineraryStop;
+    const stop = out[i] as ItineraryStop;
+    const next = out[i + 1];
+    if (!prev.departAt) break;
+    const arrive = Date.parse(prev.departAt) + (legs[i - 1]?.durationSeconds ?? 0) * 1000;
+    stop.arriveAt = toZonedIso(new Date(arrive), timeZone);
+    if (!next) {
+      stop.departAt = null;
+    } else if (next.day > stop.day && stop.departAt) {
+      const depart = Math.max(Date.parse(stop.departAt), arrive);
+      stop.departAt = toZonedIso(new Date(depart), timeZone);
+    } else {
+      stop.departAt = toZonedIso(new Date(arrive + stop.dwellMinutes * MINUTE), timeZone);
+    }
+  }
+  return out;
+}
