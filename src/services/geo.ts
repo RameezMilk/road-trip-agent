@@ -1,0 +1,418 @@
+import { z } from "zod";
+import { estimateLeg, haversineMeters } from "../domain/geo";
+import { LatLng, type RouteLeg } from "../schemas";
+
+export interface GeocodeResult {
+  latLng: LatLng;
+  displayName: string;
+}
+
+export interface Geocoder {
+  geocode(query: string): Promise<GeocodeResult | null>;
+  /** "Benson, NC": the town at a point (names a stretch break on the highway). Optional. */
+  townAt?(latLng: LatLng): Promise<string | null>;
+}
+
+const US_STATE_CODES: Record<string, string> = {
+  alabama: "AL",
+  alaska: "AK",
+  arizona: "AZ",
+  arkansas: "AR",
+  california: "CA",
+  colorado: "CO",
+  connecticut: "CT",
+  delaware: "DE",
+  "district of columbia": "DC",
+  florida: "FL",
+  georgia: "GA",
+  hawaii: "HI",
+  idaho: "ID",
+  illinois: "IL",
+  indiana: "IN",
+  iowa: "IA",
+  kansas: "KS",
+  kentucky: "KY",
+  louisiana: "LA",
+  maine: "ME",
+  maryland: "MD",
+  massachusetts: "MA",
+  michigan: "MI",
+  minnesota: "MN",
+  mississippi: "MS",
+  missouri: "MO",
+  montana: "MT",
+  nebraska: "NE",
+  nevada: "NV",
+  "new hampshire": "NH",
+  "new jersey": "NJ",
+  "new mexico": "NM",
+  "new york": "NY",
+  "north carolina": "NC",
+  "north dakota": "ND",
+  ohio: "OH",
+  oklahoma: "OK",
+  oregon: "OR",
+  pennsylvania: "PA",
+  "rhode island": "RI",
+  "south carolina": "SC",
+  "south dakota": "SD",
+  tennessee: "TN",
+  texas: "TX",
+  utah: "UT",
+  vermont: "VT",
+  virginia: "VA",
+  washington: "WA",
+  "west virginia": "WV",
+  wisconsin: "WI",
+  wyoming: "WY",
+};
+
+export interface Router {
+  /** One leg per consecutive pair of points. */
+  route(points: Array<{ id: string; latLng: LatLng }>): Promise<RouteLeg[]>;
+}
+
+type FetchFn = typeof fetch;
+type Log = (event: string, data?: Record<string, unknown>) => void;
+
+const NominatimResults = z.array(
+  z.object({ lat: z.coerce.number(), lon: z.coerce.number(), display_name: z.string() }),
+);
+
+/**
+ * OpenStreetMap Nominatim. Usage policy: ≤ 1 request/second, identifying User-Agent, cache results.
+ * Requests are serialised through a promise chain so concurrent callers still respect the rate limit.
+ */
+export class NominatimGeocoder implements Geocoder {
+  private chain: Promise<unknown> = Promise.resolve();
+  private lastRequestAt = 0;
+  private readonly cache = new Map<string, GeocodeResult | null>();
+
+  constructor(
+    private readonly baseUrl: string,
+    private readonly userAgent: string,
+    private readonly fetchFn: FetchFn = fetch,
+    private readonly minIntervalMs = 1100,
+    private readonly log: Log = () => {},
+  ) {}
+
+  geocode(query: string): Promise<GeocodeResult | null> {
+    const key = query.trim().toLowerCase();
+    if (!key) return Promise.resolve(null);
+    if (this.cache.has(key)) return Promise.resolve(this.cache.get(key) ?? null);
+    const run = this.chain.then(() => this.request(key, query.trim()));
+    this.chain = run.catch(() => undefined);
+    return run;
+  }
+
+  private async request(key: string, query: string): Promise<GeocodeResult | null> {
+    if (this.cache.has(key)) return this.cache.get(key) ?? null;
+    const wait = this.lastRequestAt + this.minIntervalMs - Date.now();
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    this.lastRequestAt = Date.now();
+    const url = new URL("/search", this.baseUrl);
+    url.searchParams.set("q", query);
+    url.searchParams.set("format", "jsonv2");
+    url.searchParams.set("limit", "1");
+    url.searchParams.set("countrycodes", "us");
+    try {
+      const res = await this.fetchFn(url, { headers: { "User-Agent": this.userAgent, Accept: "application/json" } });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const [hit] = NominatimResults.parse(await res.json());
+      const result = hit
+        ? { latLng: LatLng.parse({ lat: hit.lat, lng: hit.lon }), displayName: hit.display_name }
+        : null;
+      this.cache.set(key, result);
+      return result;
+    } catch (error) {
+      this.log("geocode_failed", { query, error: String(error) });
+      return null;
+    }
+  }
+}
+
+const PhotonResponse = z.object({
+  features: z.array(
+    z.object({
+      geometry: z.object({ coordinates: z.tuple([z.number(), z.number()]) }),
+      properties: z
+        .object({
+          name: z.string().optional(),
+          housenumber: z.string().optional(),
+          street: z.string().optional(),
+          city: z.string().optional(),
+          county: z.string().optional(),
+          district: z.string().optional(),
+          state: z.string().optional(),
+          countrycode: z.string().optional(),
+        })
+        .loose(),
+    }),
+  ),
+});
+
+const STATE_CODE = /^[A-Z]{2}$/i;
+/** A named place counts as "in" a city if it's this close to the city's centre (parks, visitor centres). */
+const NEAR_CITY_METERS = 30_000;
+const norm = (s: string | undefined) =>
+  (s ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const STREET_NOISE = new Set(
+  "n s e w north south east west nw ne sw se st street ave avenue rd road dr drive blvd boulevard hwy highway pkwy parkway ln lane way ct court pl place cir circle us nc sc va i".split(
+    " ",
+  ),
+);
+const streetWords = (s: string) =>
+  norm(s)
+    .split(" ")
+    .filter((w) => w.length > 1 && !STREET_NOISE.has(w) && !/^\d+$/.test(w));
+
+/** "Name, City, ST" → the city part ("City, ST"), if the query names one. */
+export function cityOf(query: string): string | null {
+  const segments = query
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (segments.length >= 3) return segments.slice(-2).join(", ");
+  if (segments.length === 2 && !STATE_CODE.test(segments[1] ?? "")) return segments[1] ?? null;
+  return null;
+}
+
+/**
+ * Does a Photon hit really answer "Name, City, ST"? (It happily returns a same-name place in another city.)
+ * "match": name (or street + house number) and city agree. "check_distance": the name agrees but the hit
+ * carries no matching city (often just a county), so the caller checks it's near the city. "no": reject.
+ */
+export function photonHitMatches(
+  query: string,
+  p: z.infer<typeof PhotonResponse>["features"][number]["properties"],
+): "match" | "check_distance" | "no" {
+  if (p.countrycode && p.countrycode.toUpperCase() !== "US") return "no";
+  const head = norm(query.split(",")[0]);
+  if (!head) return "no";
+  const name = norm(p.name);
+  const nameMatches = Boolean(name && (name.includes(head) || (head.includes(name) && name.split(" ").length >= 2)));
+  let headMatches = nameMatches;
+  if (!headMatches && /^\d/.test(head) && p.street) {
+    // "1208 W Wendover Ave": same street words and, if the hit has one, the same house number.
+    const number = head.match(/^(\d+)/)?.[1];
+    const words = streetWords(p.street);
+    headMatches =
+      words.length > 0 &&
+      words.every((w) => head.includes(w)) &&
+      (!p.housenumber || p.housenumber.split(/\s/)[0] === number);
+  }
+  if (!headMatches) return "no";
+  const city = cityOf(query);
+  if (!city) return "match";
+  const cityName = norm(city.split(",")[0]);
+  const sameCity = [p.city, p.district, p.name].some((v) => {
+    const n = norm(v);
+    return Boolean(n && (n === cityName || n.includes(cityName) || cityName.includes(n)));
+  });
+  return sameCity ? "match" : "check_distance";
+}
+
+/**
+ * Komoot Photon (OSM data, photon.komoot.io): no 1 req/s limit, so a draft's stops are located in
+ * parallel (~0.5 s) instead of ~1.1 s each through Nominatim. Fair use: one request per stop, cached.
+ * Hits that don't match the query's name and city are treated as misses.
+ */
+export class PhotonGeocoder implements Geocoder {
+  private readonly cache = new Map<string, Promise<GeocodeResult | null>>();
+
+  constructor(
+    private readonly baseUrl: string,
+    private readonly userAgent: string,
+    private readonly fetchFn: FetchFn = fetch,
+    private readonly log: Log = () => {},
+  ) {}
+
+  geocode(query: string): Promise<GeocodeResult | null> {
+    const key = query.trim().toLowerCase();
+    if (!key) return Promise.resolve(null);
+    let hit = this.cache.get(key);
+    if (!hit) {
+      hit = this.request(query.trim());
+      this.cache.set(key, hit);
+    }
+    return hit;
+  }
+
+  async townAt(latLng: LatLng): Promise<string | null> {
+    const url = new URL("/reverse", this.baseUrl);
+    url.searchParams.set("lat", latLng.lat.toFixed(5));
+    url.searchParams.set("lon", latLng.lng.toFixed(5));
+    url.searchParams.set("lang", "en");
+    url.searchParams.set("limit", "1");
+    try {
+      const res = await this.fetchFn(url, {
+        headers: { "User-Agent": this.userAgent, Accept: "application/json" },
+        signal: AbortSignal.timeout(4000),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const p = PhotonResponse.parse(await res.json()).features[0]?.properties;
+      const town = p?.city ?? p?.district ?? p?.county ?? p?.name;
+      if (!town) return null;
+      const state = p?.state ? (US_STATE_CODES[p.state.toLowerCase()] ?? p.state) : null;
+      return state ? `${town}, ${state}` : town;
+    } catch (error) {
+      this.log("reverse_geocode_failed", { error: String(error) });
+      return null;
+    }
+  }
+
+  private async request(query: string): Promise<GeocodeResult | null> {
+    const url = new URL("/api/", this.baseUrl);
+    url.searchParams.set("q", query);
+    url.searchParams.set("limit", "1");
+    url.searchParams.set("lang", "en");
+    try {
+      const res = await this.fetchFn(url, {
+        headers: { "User-Agent": this.userAgent, Accept: "application/json" },
+        signal: AbortSignal.timeout(4000),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const [feature] = PhotonResponse.parse(await res.json()).features;
+      const verdict = feature ? photonHitMatches(query, feature.properties) : "no";
+      if (!feature || verdict === "no") return null;
+      const [lng, lat] = feature.geometry.coordinates;
+      if (verdict === "check_distance") {
+        const city = cityOf(query);
+        const anchor = city ? await this.geocode(city) : null;
+        if (!anchor || haversineMeters(anchor.latLng, { lat, lng }) > NEAR_CITY_METERS) return null;
+      }
+      const p = feature.properties;
+      const displayName = [
+        p.name,
+        p.housenumber && p.street ? `${p.housenumber} ${p.street}` : p.street,
+        p.city,
+        p.state,
+      ]
+        .filter(Boolean)
+        .join(", ");
+      return { latLng: LatLng.parse({ lat, lng }), displayName: displayName || query };
+    } catch (error) {
+      this.log("photon_failed", { query, error: String(error) });
+      return null;
+    }
+  }
+}
+
+/** Tries each geocoder in order (Photon first for speed, then rate-limited Nominatim). */
+export class FallbackGeocoder implements Geocoder {
+  private readonly geocoders: Geocoder[];
+
+  constructor(...geocoders: Geocoder[]) {
+    this.geocoders = geocoders;
+  }
+
+  async geocode(query: string): Promise<GeocodeResult | null> {
+    for (const g of this.geocoders) {
+      const hit = await g.geocode(query);
+      if (hit) return hit;
+    }
+    return null;
+  }
+
+  async townAt(latLng: LatLng): Promise<string | null> {
+    for (const g of this.geocoders) {
+      const town = await g.townAt?.(latLng);
+      if (town) return town;
+    }
+    return null;
+  }
+}
+
+const OsrmResponse = z.object({
+  code: z.string(),
+  routes: z
+    .array(
+      z.object({
+        geometry: z.object({ coordinates: z.array(z.tuple([z.number(), z.number()])) }),
+        legs: z.array(z.object({ distance: z.number(), duration: z.number() })),
+      }),
+    )
+    .optional(),
+  waypoints: z.array(z.object({ waypoint_index: z.number().optional() })).optional(),
+});
+
+/**
+ * OSRM public demo server: one multi-waypoint request for the whole trip. The response geometry is split
+ * back into legs at the snapped waypoints. Falls back to straight-line estimates (labeled) on failure.
+ */
+export class OsrmRouter implements Router {
+  constructor(
+    private readonly baseUrl: string,
+    private readonly userAgent: string,
+    private readonly fetchFn: FetchFn = fetch,
+    private readonly log: Log = () => {},
+  ) {}
+
+  async route(points: Array<{ id: string; latLng: LatLng }>): Promise<RouteLeg[]> {
+    if (points.length < 2) return [];
+    try {
+      return await this.osrm(points);
+    } catch (error) {
+      this.log("route_fallback_estimate", { error: String(error) });
+      return points.slice(1).map((p, i) => estimateLeg(points[i] as (typeof points)[number], p));
+    }
+  }
+
+  private async osrm(points: Array<{ id: string; latLng: LatLng }>): Promise<RouteLeg[]> {
+    const coords = points.map((p) => `${p.latLng.lng.toFixed(6)},${p.latLng.lat.toFixed(6)}`).join(";");
+    const url = new URL(`/route/v1/driving/${coords}`, this.baseUrl);
+    url.searchParams.set("overview", "simplified");
+    url.searchParams.set("geometries", "geojson");
+    url.searchParams.set("steps", "false");
+    const res = await this.fetchFn(url, { headers: { "User-Agent": this.userAgent } });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const body = OsrmResponse.parse(await res.json());
+    const route = body.routes?.[0];
+    if (body.code !== "Ok" || !route || route.legs.length !== points.length - 1) throw new Error(`OSRM ${body.code}`);
+    const line = route.geometry.coordinates.map(([lng, lat]) => [lat, lng] as [number, number]);
+    const cut = splitAtWaypoints(
+      line,
+      points.map((p) => p.latLng),
+    );
+    return route.legs.map((leg, i) => ({
+      fromStopId: (points[i] as (typeof points)[number]).id,
+      toStopId: (points[i + 1] as (typeof points)[number]).id,
+      distanceMeters: Math.round(leg.distance),
+      durationSeconds: Math.round(leg.duration),
+      source: "osrm" as const,
+      geometry: cut[i] ?? [],
+    }));
+  }
+}
+
+/** Splits a polyline into per-leg pieces at the vertices nearest each waypoint (monotonic). */
+export function splitAtWaypoints(line: Array<[number, number]>, waypoints: LatLng[]): Array<Array<[number, number]>> {
+  const indices: number[] = [];
+  let from = 0;
+  for (const wp of waypoints) {
+    let best = from;
+    let bestDist = Number.POSITIVE_INFINITY;
+    for (let i = from; i < line.length; i++) {
+      const [lat, lng] = line[i] as [number, number];
+      const d = (lat - wp.lat) ** 2 + (lng - wp.lng) ** 2;
+      if (d < bestDist) {
+        bestDist = d;
+        best = i;
+      }
+    }
+    indices.push(best);
+    from = best;
+  }
+  const pieces: Array<Array<[number, number]>> = [];
+  for (let i = 0; i < waypoints.length - 1; i++) {
+    const a = indices[i] ?? 0;
+    const b = indices[i + 1] ?? line.length - 1;
+    pieces.push(line.slice(a, Math.max(a + 1, b) + 1));
+  }
+  return pieces;
+}

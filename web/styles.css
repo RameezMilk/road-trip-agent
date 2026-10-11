@@ -1,0 +1,1460 @@
+/* Frutiger Aero: bright sky, glossy green hills, aqua glass, gel buttons and soft rising bubbles —
+   with readable contrast and big tap targets. */
+:root {
+  color-scheme: light;
+  --ink: #0b3a5b;
+  --muted: #3f6a86;
+  --glass: rgba(255, 255, 255, 0.58);
+  --glass-strong: rgba(255, 255, 255, 0.86);
+  --glass-edge: rgba(255, 255, 255, 0.95);
+  --aqua: #16a5d8;
+  --aqua-deep: #0d86b6;
+  --aqua-light: #7fdcff;
+  --leaf: #3fae49;
+  --leaf-deep: #2b8a34;
+  --warn: #c2410c;
+  --sky-high: #3aa6e6;
+  --sky-mid: #9fdcf7;
+  --sky-low: #e9fbff;
+
+  --k-origin: #0d86b6;
+  --k-destination: #7c3aed;
+  --k-restaurant: #f28c28;
+  --k-gas: #e0452f;
+  --k-rest_stop: #2bb5a8;
+  --k-lodging: #3d6fd8;
+  --k-scenic: #3fae49;
+  --k-attraction: #e8b51a;
+  --k-charging: #19c3e6;
+
+  /* Shared gloss recipes. */
+  --gel-aqua: linear-gradient(180deg, #a6e9ff 0%, #4cc4f0 46%, var(--aqua) 50%, var(--aqua-deep) 100%);
+  --gel-leaf: linear-gradient(180deg, #c6f7a4 0%, #6fd36a 46%, var(--leaf) 50%, var(--leaf-deep) 100%);
+  --sheen: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.85) 0%,
+    rgba(255, 255, 255, 0.25) 48%,
+    rgba(255, 255, 255, 0) 50%
+  );
+  --shadow-soft: 0 10px 28px rgba(8, 72, 120, 0.18), 0 2px 6px rgba(8, 72, 120, 0.12);
+
+  font-family: "Segoe UI", "Frutiger", "Myriad Pro", "Helvetica Neue", system-ui, -apple-system, sans-serif;
+  line-height: 1.4;
+  color: var(--ink);
+  -webkit-text-size-adjust: 100%;
+}
+
+* {
+  box-sizing: border-box;
+  min-width: 0;
+}
+
+/* The document scrolls by default (poll widget, dashboard list tabs). `html.lock` (the Map tab and short
+   inline cards) pins it so only the map, or the active pane, moves. */
+/* `clip`, not `hidden`: hidden makes <body> a scroll container, which breaks the sticky header. */
+html,
+body {
+  width: 100%;
+  overflow-x: clip;
+}
+
+html {
+  background: var(--sky-high);
+}
+
+html.lock,
+html.lock body {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+body {
+  margin: 0;
+  min-height: 100%;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Sky, sun glow, light swoosh and glossy hills. A fixed layer, because iOS ignores fixed backgrounds. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    /* rolling hills, crest-lit like glossy plastic */
+    radial-gradient(
+      75% 22% at 18% 101%,
+      #2f8f36 0%,
+      #4fb544 38%,
+      #86d968 56%,
+      #c9f5a2 59.4%,
+      rgba(201, 245, 162, 0) 60%
+    ),
+    radial-gradient(
+      95% 28% at 88% 104%,
+      #3b9e3e 0%,
+      #63c255 40%,
+      #a3e47f 57%,
+      #dcfac0 59.4%,
+      rgba(220, 250, 192, 0) 60%
+    ),
+    /* aurora swoosh */
+    radial-gradient(
+      160% 70% at 0% 112%,
+      rgba(255, 255, 255, 0) 60%,
+      rgba(255, 255, 255, 0.55) 62.5%,
+      rgba(255, 255, 255, 0) 66%
+    ),
+    radial-gradient(
+      160% 70% at 0% 115%,
+      rgba(255, 255, 255, 0) 64%,
+      rgba(180, 245, 255, 0.45) 66%,
+      rgba(255, 255, 255, 0) 69%
+    ),
+    /* sun */
+    radial-gradient(
+      50% 30% at 88% -4%,
+      rgba(255, 255, 255, 0.95) 0%,
+      rgba(255, 255, 255, 0.35) 45%,
+      rgba(255, 255, 255, 0) 70%
+    ),
+    linear-gradient(180deg, var(--sky-high) 0%, var(--sky-mid) 38%, var(--sky-low) 72%, #f6feff 82%);
+}
+
+/* Rising glossy bubbles. */
+.bubbles {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.bubbles i {
+  position: absolute;
+  bottom: -90px;
+  left: var(--x);
+  width: var(--s);
+  height: var(--s);
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.75);
+  background:
+    radial-gradient(circle at 32% 26%, rgba(255, 255, 255, 0.95) 0 12%, rgba(255, 255, 255, 0) 30%),
+    radial-gradient(circle at 70% 78%, rgba(255, 255, 255, 0.5) 0 8%, rgba(255, 255, 255, 0) 24%),
+    radial-gradient(circle at 50% 50%, rgba(160, 230, 255, 0.05) 55%, rgba(110, 210, 250, 0.35) 100%);
+  box-shadow: inset 0 0 10px rgba(255, 255, 255, 0.4);
+  opacity: 0.85;
+  animation: rise var(--t) linear var(--d) infinite;
+}
+
+.bubbles i:nth-child(1) {
+  --x: 6%;
+  --s: 44px;
+  --t: 19s;
+  --d: -2s;
+}
+.bubbles i:nth-child(2) {
+  --x: 22%;
+  --s: 18px;
+  --t: 14s;
+  --d: -9s;
+}
+.bubbles i:nth-child(3) {
+  --x: 38%;
+  --s: 30px;
+  --t: 23s;
+  --d: -15s;
+}
+.bubbles i:nth-child(4) {
+  --x: 55%;
+  --s: 14px;
+  --t: 12s;
+  --d: -4s;
+}
+.bubbles i:nth-child(5) {
+  --x: 68%;
+  --s: 56px;
+  --t: 27s;
+  --d: -20s;
+}
+.bubbles i:nth-child(6) {
+  --x: 82%;
+  --s: 22px;
+  --t: 16s;
+  --d: -7s;
+}
+.bubbles i:nth-child(7) {
+  --x: 92%;
+  --s: 36px;
+  --t: 21s;
+  --d: -12s;
+}
+.bubbles i:nth-child(8) {
+  --x: 47%;
+  --s: 10px;
+  --t: 10s;
+  --d: -1s;
+}
+
+@keyframes rise {
+  0% {
+    transform: translate3d(0, 0, 0);
+    opacity: 0;
+  }
+  10% {
+    opacity: 0.85;
+  }
+  50% {
+    transform: translate3d(14px, -55vh, 0);
+  }
+  90% {
+    opacity: 0.7;
+  }
+  100% {
+    transform: translate3d(-8px, -115vh, 0);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bubbles i {
+    animation: none;
+    bottom: calc(var(--s) * 3);
+  }
+  .badge.live::before {
+    animation: none;
+  }
+}
+
+.app {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  min-height: 100vh;
+  max-width: 720px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right))
+    max(10px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
+}
+
+html.lock .app {
+  height: 100%;
+  min-height: 0;
+}
+
+/* --- glass panels: frosted white, crisp rim, a gel sheen across the top half ------------------------ */
+.glass {
+  position: relative;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.78) 0%, var(--glass) 60%, rgba(235, 250, 255, 0.6) 100%);
+  border: 1px solid var(--glass-edge);
+  border-radius: 20px;
+  box-shadow:
+    var(--shadow-soft),
+    inset 0 1px 0 #fff,
+    inset 0 -1px 0 rgba(255, 255, 255, 0.6);
+  backdrop-filter: blur(14px) saturate(1.4);
+  -webkit-backdrop-filter: blur(14px) saturate(1.4);
+}
+
+.header.glass::before,
+.tabs.glass::before {
+  content: "";
+  position: absolute;
+  inset: 1px 1px 50%;
+  border-radius: 19px 19px 40% 40% / 19px 19px 14px 14px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.75), rgba(255, 255, 255, 0.1));
+  pointer-events: none;
+}
+
+/* Header + tabs. Sticky while the document scrolls; a sky-tinted fade keeps scrolled cards from
+   showing through the gaps. */
+.top {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+html:not(.lock) .top {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  margin: calc(-1 * max(8px, env(safe-area-inset-top))) -8px 0;
+  padding: max(8px, env(safe-area-inset-top)) 8px 10px;
+  background: linear-gradient(
+    180deg,
+    rgba(70, 175, 234, 0.94) 0%,
+    rgba(130, 205, 244, 0.85) 82%,
+    rgba(150, 215, 246, 0) 100%
+  );
+}
+
+/* --- header -------------------------------------------------------------------------------------- */
+.header {
+  padding: 10px 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.header .titles {
+  position: relative;
+  flex: 1;
+}
+
+.header h1 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-shadow: 0 1px 0 #fff;
+}
+
+.header .sub {
+  margin: 1px 0 0;
+  font-size: 12.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.badge {
+  position: relative;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: #fff;
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  background: var(--gel-aqua);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.8),
+    0 2px 6px rgba(8, 72, 120, 0.3);
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.3);
+}
+
+.badge[hidden] {
+  display: none;
+}
+
+.badge.live {
+  background: var(--gel-leaf);
+}
+
+.badge.live::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #eaffd9;
+  box-shadow: 0 0 0 0 rgba(234, 255, 217, 0.9);
+  animation: pulse 2s ease-out infinite;
+}
+
+@keyframes pulse {
+  70% {
+    box-shadow: 0 0 0 7px rgba(234, 255, 217, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(234, 255, 217, 0);
+  }
+}
+
+/* --- tabs: one component at a time, full size, big targets --------------------------------------- */
+.tabs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+  padding: 5px;
+}
+
+.tab {
+  position: relative;
+  min-height: 50px;
+  border: 1px solid transparent;
+  border-radius: 15px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  line-height: 1.1;
+  transition:
+    background-color 0.2s,
+    transform 0.1s;
+}
+
+.tab:active {
+  transform: scale(0.96);
+}
+
+.tab .ico {
+  font-size: 19px;
+  filter: drop-shadow(0 1px 1px rgba(8, 72, 120, 0.3));
+}
+
+.tab[aria-selected="true"] {
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.8);
+  background: var(--gel-aqua);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.85),
+    inset 0 -2px 6px rgba(0, 90, 140, 0.25),
+    0 3px 10px rgba(13, 134, 182, 0.45);
+  text-shadow: 0 1px 1px rgba(0, 60, 100, 0.45);
+}
+
+.tab:focus-visible {
+  outline: 3px solid rgba(22, 165, 216, 0.5);
+  outline-offset: 1px;
+}
+
+/* --- stage --------------------------------------------------------------------------------------- */
+.stage {
+  flex: 1 0 auto;
+  border-radius: 22px;
+}
+
+html.lock .stage {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* A large scrolling glass panel with a live backdrop blur is slow on iOS; a denser tint looks the same. */
+html:not(.lock) .stage {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.55) 0%, rgba(225, 246, 255, 0.5) 100%);
+}
+
+.pane {
+  display: none;
+}
+
+.pane.active {
+  display: block;
+}
+
+.pane.scroll {
+  padding: 14px 12px 18px;
+}
+
+/* Locked layout (short inline card): panes fill the stage and scroll inside it, vertically only. */
+html.lock .pane {
+  position: absolute;
+  inset: 0;
+}
+
+html.lock .pane.scroll {
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+}
+
+/* --- map pane ------------------------------------------------------------------------------------ */
+.pane.map-pane {
+  padding: 5px;
+  overflow: hidden;
+}
+
+#map {
+  width: 100%;
+  height: 100%;
+  border-radius: 17px;
+  background: linear-gradient(180deg, #cfefff, #bfe8c4);
+  box-shadow: inset 0 0 0 1px rgba(13, 134, 182, 0.15);
+}
+
+.map-chip {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  top: 14px;
+  z-index: 500;
+  padding: 9px 14px;
+  border-radius: 16px;
+  font-size: 13.5px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.97), rgba(232, 249, 255, 0.92));
+  border: 1px solid #fff;
+  box-shadow: 0 6px 16px rgba(8, 72, 120, 0.22);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
+.map-chip[hidden] {
+  display: none;
+}
+
+.map-actions {
+  position: absolute;
+  left: 14px;
+  bottom: 30px;
+  z-index: 500;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  max-width: calc(100% - 80px); /* leave the zoom buttons room */
+}
+
+.map-actions[hidden] {
+  display: none;
+}
+
+/* Gel pill button: white glass, and `.go` is the green "begin" variant. */
+.gel-btn {
+  position: relative;
+  min-height: 46px;
+  padding: 0 16px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.95);
+  font: inherit;
+  font-size: 14.5px;
+  font-weight: 700;
+  color: var(--ink);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: linear-gradient(180deg, #ffffff 0%, #f2fbff 48%, #dcf2fc 52%, #eaf8ff 100%);
+  box-shadow:
+    inset 0 1px 0 #fff,
+    0 4px 12px rgba(8, 72, 120, 0.28);
+  transition: transform 0.1s;
+}
+
+.gel-btn:active {
+  transform: scale(0.95);
+}
+
+.gel-btn.go {
+  color: #fff;
+  background: var(--gel-leaf);
+  text-shadow: 0 1px 1px rgba(0, 60, 10, 0.45);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.85),
+    inset 0 -2px 6px rgba(0, 80, 10, 0.2),
+    0 4px 14px rgba(43, 138, 52, 0.45);
+}
+
+.gel-btn:focus-visible {
+  outline: 3px solid rgba(22, 165, 216, 0.55);
+  outline-offset: 2px;
+}
+
+.leaflet-container {
+  font: inherit;
+}
+
+.leaflet-bar {
+  border: 1px solid #fff !important;
+  border-radius: 14px !important;
+  overflow: hidden;
+  box-shadow: 0 4px 12px rgba(8, 72, 120, 0.28) !important;
+}
+
+.leaflet-bar a,
+.leaflet-touch .leaflet-bar a {
+  width: 40px;
+  height: 40px;
+  line-height: 38px;
+  color: var(--aqua-deep);
+  background: linear-gradient(180deg, #fff 0%, #f0faff 50%, #ddf2fc 100%);
+}
+
+.leaflet-control-attribution {
+  border-radius: 8px 0 0 0;
+  background: rgba(255, 255, 255, 0.8) !important;
+}
+
+.leaflet-popup-content-wrapper {
+  border-radius: 18px;
+  background: linear-gradient(180deg, #ffffff 0%, #f1fbff 100%);
+  border: 1px solid #fff;
+  box-shadow: 0 10px 28px rgba(8, 72, 120, 0.3);
+}
+
+.leaflet-popup-tip {
+  background: #f1fbff;
+}
+
+.leaflet-tooltip {
+  border-radius: 10px;
+  border: 1px solid #fff;
+  box-shadow: 0 4px 12px rgba(8, 72, 120, 0.25);
+}
+
+.pin {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 18px;
+  border: 2px solid #fff;
+  background:
+    radial-gradient(ellipse 60% 38% at 50% 18%, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0) 100%),
+    radial-gradient(circle at 50% 120%, rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0) 60%), var(--pin, var(--aqua));
+  box-shadow:
+    0 4px 10px rgba(8, 72, 120, 0.4),
+    inset 0 -3px 6px rgba(0, 0, 0, 0.2);
+  position: relative;
+}
+
+.pin .n {
+  position: absolute;
+  right: -6px;
+  top: -6px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.85);
+  background: linear-gradient(180deg, #2a5f86, var(--ink));
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+}
+
+.pin.approx {
+  border-style: dashed;
+}
+
+.pin.done {
+  filter: grayscale(0.7) opacity(0.75);
+}
+
+.popup h3 {
+  margin: 0 0 4px;
+  font-size: 15px;
+}
+
+.popup p {
+  margin: 3px 0;
+  font-size: 12.5px;
+}
+
+.popup-links {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.popup a.gmaps {
+  display: block;
+  padding: 9px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.8);
+  color: #fff;
+  text-decoration: none;
+  text-align: center;
+  font-weight: 700;
+  background: var(--gel-aqua);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.8),
+    0 2px 6px rgba(13, 134, 182, 0.35);
+  text-shadow: 0 1px 1px rgba(0, 60, 100, 0.4);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.popup a.gmaps.go {
+  background: var(--gel-leaf);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.8),
+    0 2px 6px rgba(43, 138, 52, 0.4);
+}
+
+.tag {
+  display: inline-block;
+  font-size: 10.5px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: rgba(13, 134, 182, 0.12);
+  color: var(--aqua-deep);
+  font-weight: 600;
+}
+
+.tag.warn {
+  background: rgba(194, 65, 12, 0.12);
+  color: var(--warn);
+}
+
+.tag.green {
+  background: rgba(63, 174, 73, 0.15);
+  color: var(--leaf-deep);
+}
+
+/* --- shared pane typography ---------------------------------------------------------------------- */
+.pane h2 {
+  margin: 18px 2px 10px;
+  font-size: 12.5px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--aqua-deep);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pane h2:first-child,
+.next-up + h2 {
+  margin-top: 4px;
+}
+
+.pane h2::after {
+  content: "";
+  flex: 1;
+  height: 2px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, rgba(13, 134, 182, 0.35), rgba(13, 134, 182, 0));
+}
+
+.card {
+  border-radius: 18px;
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.92) 0%,
+    rgba(255, 255, 255, 0.72) 50%,
+    rgba(240, 251, 255, 0.78) 100%
+  );
+  border: 1px solid #fff;
+  box-shadow:
+    0 4px 14px rgba(8, 72, 120, 0.1),
+    inset 0 1px 0 #fff;
+}
+
+/* --- schedule pane: glass cards on an aqua timeline tube ----------------------------------------- */
+.next-up {
+  font-size: 14.5px;
+  padding: 12px 14px;
+  margin-bottom: 14px;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #ffffff 0%, #effaff 100%);
+  border: 1px solid #fff;
+  box-shadow: 0 4px 14px rgba(8, 72, 120, 0.12);
+}
+
+.day {
+  margin: 16px 2px 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.stop {
+  --tl-x: 102px; /* orb centre: border + padding + time column + gap + half the orb column */
+  position: relative;
+  width: 100%;
+  min-height: 62px;
+  display: grid;
+  grid-template-columns: 66px 36px minmax(0, 1fr) 14px;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px 9px 10px;
+  margin: 0 0 8px;
+  border: 1px solid #fff;
+  border-radius: 18px;
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.95) 0%,
+    rgba(255, 255, 255, 0.78) 50%,
+    rgba(238, 250, 255, 0.85) 100%
+  );
+  box-shadow:
+    0 4px 12px rgba(8, 72, 120, 0.1),
+    inset 0 1px 0 #fff;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    transform 0.12s,
+    box-shadow 0.12s;
+}
+
+/* The tube: from the card above into this orb, and from this orb down to the next card. */
+.stop:not(.first)::before,
+.stop:not(.last)::after {
+  content: "";
+  position: absolute;
+  left: calc(var(--tl-x) - 3px);
+  width: 6px;
+  border-radius: 3px;
+  background: linear-gradient(90deg, #6fd5ff, #bff0ff 45%, var(--aqua));
+  opacity: 0.8;
+}
+
+.stop:not(.first)::before {
+  top: -10px;
+  height: calc(50% + 10px);
+}
+
+.stop:not(.last)::after {
+  top: 50%;
+  bottom: -10px;
+}
+
+.stop:active {
+  transform: scale(0.985);
+}
+
+.stop:active,
+.stop:focus-visible {
+  border-color: var(--aqua-light);
+  outline: none;
+  box-shadow:
+    0 0 0 3px rgba(22, 165, 216, 0.25),
+    0 4px 12px rgba(8, 72, 120, 0.12);
+}
+
+.stop.done {
+  opacity: 0.62;
+}
+
+.stop .time {
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+.orb {
+  position: relative;
+  z-index: 1;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 17px;
+  border: 2px solid #fff;
+  background:
+    radial-gradient(ellipse 62% 38% at 50% 16%, rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0) 100%),
+    radial-gradient(circle at 50% 125%, rgba(255, 255, 255, 0.6), rgba(255, 255, 255, 0) 60%), var(--pin, var(--aqua));
+  box-shadow:
+    0 3px 7px rgba(8, 72, 120, 0.3),
+    inset 0 -2px 5px rgba(0, 0, 0, 0.18);
+}
+
+.stop .info {
+  overflow: hidden;
+}
+
+.stop .name {
+  display: block;
+  font-weight: 700;
+  font-size: 15px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stop .meta {
+  display: block;
+  font-size: 12.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stop .chev {
+  color: var(--aqua);
+  font-size: 20px;
+  font-weight: 700;
+}
+
+/* --- impact pane: gel energy bars ---------------------------------------------------------------- */
+.meter {
+  margin: 0 0 12px;
+  padding: 14px;
+}
+
+.meter .label {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.meter .value {
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  color: var(--leaf-deep);
+  text-shadow: 0 1px 0 #fff;
+}
+
+.meter .value small {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  text-shadow: none;
+}
+
+.cells {
+  margin-top: 8px;
+  display: grid;
+  grid-template-columns: repeat(10, minmax(0, 1fr));
+  gap: 3px;
+  padding: 4px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(11, 58, 91, 0.2), rgba(11, 58, 91, 0.08));
+  box-shadow:
+    inset 0 2px 4px rgba(11, 58, 91, 0.25),
+    0 1px 0 #fff;
+}
+
+.cell {
+  height: 20px;
+  border-radius: 4px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.85), rgba(255, 255, 255, 0.5));
+}
+
+.cell:first-child {
+  border-radius: 999px 4px 4px 999px;
+}
+
+.cell:last-child {
+  border-radius: 4px 999px 999px 4px;
+}
+
+.cell.on {
+  background: var(--sheen), linear-gradient(180deg, #9be86f 0%, var(--leaf) 60%, var(--leaf-deep) 100%);
+  box-shadow: 0 0 6px rgba(111, 211, 106, 0.6);
+}
+
+.cell.half {
+  background: var(--sheen), linear-gradient(90deg, #6fd36a 50%, rgba(255, 255, 255, 0.6) 50%);
+}
+
+.meter .hint {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 6px;
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.stat {
+  position: relative;
+  padding: 12px 8px 10px;
+  border-radius: 18px;
+  border: 1px solid #fff;
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.95) 0%,
+    rgba(255, 255, 255, 0.72) 50%,
+    rgba(232, 248, 255, 0.85) 100%
+  );
+  box-shadow:
+    0 4px 12px rgba(8, 72, 120, 0.1),
+    inset 0 1px 0 #fff;
+  text-align: center;
+}
+
+.stat i {
+  display: block;
+  font-style: normal;
+  font-size: 20px;
+  line-height: 1;
+  margin-bottom: 4px;
+  filter: drop-shadow(0 1px 1px rgba(8, 72, 120, 0.25));
+}
+
+.stat b {
+  display: block;
+  font-size: 20px;
+  font-weight: 800;
+  color: var(--aqua-deep);
+}
+
+.stat span {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* --- trip pane ----------------------------------------------------------------------------------- */
+.crew {
+  list-style: none;
+  margin: 0 0 14px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.crew li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px 8px 8px;
+  border-radius: 999px;
+  border: 1px solid #fff;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(238, 250, 255, 0.8));
+  box-shadow: 0 3px 10px rgba(8, 72, 120, 0.1);
+  font-size: 15px;
+}
+
+.avatar {
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-weight: 800;
+  color: #fff;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.3);
+  border: 2px solid #fff;
+  background:
+    radial-gradient(ellipse 62% 38% at 50% 16%, rgba(255, 255, 255, 0.85), rgba(255, 255, 255, 0) 100%),
+    hsl(var(--hue) 70% 46%);
+  box-shadow: 0 2px 6px rgba(8, 72, 120, 0.3);
+}
+
+.crew .who {
+  flex: 1;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.crew .ok {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.list {
+  margin: 0 0 14px;
+  padding: 10px 14px 10px 30px;
+  font-size: 14px;
+  border-radius: 16px;
+  border: 1px solid #fff;
+  background: rgba(255, 255, 255, 0.75);
+}
+
+.list li {
+  margin: 4px 0;
+}
+
+.legend {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  font-size: 13px;
+  margin-bottom: 14px;
+  padding: 12px;
+  border-radius: 16px;
+  border: 1px solid #fff;
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.legend span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.legend .orb {
+  width: 26px;
+  height: 26px;
+  font-size: 13px;
+  flex: 0 0 auto;
+}
+
+.foot {
+  font-size: 11.5px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.notice {
+  padding: 16px;
+  text-align: center;
+}
+
+/* --- in-thread bubble (very short live card): one-line summary only -------------------------------- */
+.bubble-only {
+  display: none;
+}
+
+body.bubble .top,
+body.bubble .stage {
+  display: none;
+}
+
+body.bubble .bubble-only {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 100%;
+  padding: 4px 10px;
+  border-radius: 12px;
+}
+
+.b-car {
+  font-size: 20px;
+}
+
+.b-text {
+  flex: 1;
+}
+
+.b-title,
+.b-line {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.b-title {
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+.b-line {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* narrow cards: give stop names the room */
+@media (max-width: 340px) {
+  .stop {
+    --tl-x: 86px;
+    grid-template-columns: 56px 30px minmax(0, 1fr);
+    gap: 6px;
+    padding: 8px;
+  }
+  .stop .orb {
+    width: 30px;
+    height: 30px;
+    font-size: 15px;
+  }
+  .stop .chev {
+    display: none;
+  }
+  .stop .time {
+    font-size: 12px;
+  }
+  .pane.scroll {
+    padding: 10px 8px;
+  }
+  .gel-btn {
+    font-size: 13px;
+    padding: 0 12px;
+  }
+}
+
+/* short views (e.g. a live card opened inline): tighter chrome */
+@media (max-height: 420px) {
+  .app,
+  .top {
+    gap: 5px;
+  }
+  .app {
+    padding: 5px;
+  }
+  .header {
+    padding: 5px 10px;
+  }
+  .header h1 {
+    font-size: 14px;
+  }
+  .header .sub {
+    display: none;
+  }
+  .tab {
+    min-height: 40px;
+    font-size: 11px;
+  }
+  .tab .ico {
+    font-size: 15px;
+  }
+  .leaflet-control-zoom {
+    display: none;
+  }
+  .leaflet-control-attribution {
+    font-size: 8px;
+    line-height: 1.2;
+  }
+  .map-actions {
+    bottom: 18px;
+    max-width: calc(100% - 28px);
+  }
+  .gel-btn {
+    min-height: 36px;
+    font-size: 12.5px;
+    padding: 0 12px;
+  }
+}
+
+/* --- poll widget --------------------------------------------------------------------------------- */
+.poll {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.poll h1 {
+  font-size: 18px;
+  margin: 0 0 4px;
+  text-shadow: 0 1px 0 #fff;
+}
+
+#options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.choice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 50px;
+  padding: 8px 14px;
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(238, 250, 255, 0.8));
+  border: 1px solid #fff;
+  box-shadow: 0 3px 10px rgba(8, 72, 120, 0.1);
+  font-size: 14.5px;
+  cursor: pointer;
+}
+
+.choice:has(input:checked) {
+  border-color: var(--aqua-light);
+  box-shadow:
+    0 0 0 3px rgba(22, 165, 216, 0.3),
+    0 3px 10px rgba(8, 72, 120, 0.12);
+  background: #fff;
+}
+
+.choice input {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--aqua);
+}
+
+.other {
+  width: 100%;
+  min-height: 46px;
+  padding: 10px 14px;
+  border-radius: 16px;
+  border: 1px solid #fff;
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: inset 0 2px 4px rgba(11, 58, 91, 0.12);
+  font: inherit;
+  color: inherit;
+}
+
+.btn {
+  min-height: 50px;
+  border: 1px solid rgba(255, 255, 255, 0.85);
+  border-radius: 999px;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  color: #fff;
+  cursor: pointer;
+  background: var(--gel-leaf);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.85),
+    inset 0 -2px 6px rgba(0, 80, 10, 0.2),
+    0 4px 14px rgba(43, 138, 52, 0.4);
+  text-shadow: 0 1px 1px rgba(0, 60, 10, 0.45);
+}
+
+.btn:active {
+  transform: scale(0.98);
+}
+
+.btn:disabled {
+  opacity: 0.6;
+}
+
+.status {
+  font-size: 13px;
+  min-height: 18px;
+}
+
+/* --- Trippy, the mascot ------------------------------------------------------------------------------ */
+.logo {
+  position: relative;
+  flex: 0 0 auto;
+  width: 54px;
+  height: auto;
+  margin: -4px -2px -4px -4px;
+  filter: drop-shadow(0 3px 4px rgba(8, 72, 120, 0.3));
+  cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
+  animation: idle 6s ease-in-out infinite;
+}
+
+/* A little bounce now and then, like an idling engine. */
+@keyframes idle {
+  0%,
+  86%,
+  100% {
+    transform: translateY(0);
+  }
+  90% {
+    transform: translateY(-3px) rotate(-2deg);
+  }
+  94% {
+    transform: translateY(0) rotate(1deg);
+  }
+}
+
+.logo.hop {
+  animation: hop 0.6s cubic-bezier(0.3, 1.6, 0.5, 1);
+}
+
+@keyframes hop {
+  0% {
+    transform: translateY(0) scale(1, 1);
+  }
+  20% {
+    transform: translateY(2px) scale(1.08, 0.9);
+  }
+  50% {
+    transform: translateY(-12px) scale(0.95, 1.06) rotate(-6deg);
+  }
+  100% {
+    transform: translateY(0) scale(1, 1);
+  }
+}
+
+.trippy-note {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 28px 16px;
+  text-align: center;
+  font-size: 15px;
+}
+
+.trippy-note img {
+  width: 132px;
+  height: auto;
+  filter: drop-shadow(0 8px 10px rgba(8, 72, 120, 0.25));
+}
+
+.trippy-note p {
+  margin: 0;
+  padding: 10px 16px;
+  border-radius: 16px;
+  border: 1px solid #fff;
+  background: linear-gradient(180deg, #ffffff, #effaff);
+  box-shadow: 0 4px 14px rgba(8, 72, 120, 0.12);
+}
+
+/* While loading, Trippy drives in place. */
+.trippy-note.loading img {
+  animation: drive 0.9s ease-in-out infinite alternate;
+}
+
+@keyframes drive {
+  from {
+    transform: translateY(0) rotate(-1.5deg);
+  }
+  to {
+    transform: translateY(-5px) rotate(1.5deg);
+  }
+}
+
+.signoff {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 16px;
+  padding: 8px 14px 8px 8px;
+  border-radius: 999px;
+  border: 1px solid #fff;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(234, 249, 255, 0.75));
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.signoff img {
+  width: 44px;
+  height: auto;
+  filter: drop-shadow(0 2px 3px rgba(8, 72, 120, 0.25));
+}
+
+.signoff b {
+  color: #d3161d;
+}
+
+img.b-car {
+  width: 30px;
+  height: auto;
+}
+
+.poll-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--aqua-deep);
+}
+
+.poll-head .logo {
+  width: 48px;
+  margin: -4px 0;
+  cursor: default;
+}
+
+@media (max-height: 420px) {
+  .header .logo {
+    width: 36px;
+    margin: -2px 0 -2px -2px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .logo,
+  .logo.hop,
+  .trippy-note.loading img {
+    animation: none;
+  }
+}
