@@ -6,7 +6,7 @@
  * of the dashboard, unlike free ngrok). Its URL changes every run; cards always use the current one. If
  * Cloudflare can't create one (some networks block trycloudflare.com), it falls back to ngrok on the
  * PUBLIC_BASE_URL from .env; the dashboard's own requests send `ngrok-skip-browser-warning`, and each phone
- * taps "Visit Site" once (ngrok then remembers it for 7 days). TUNNEL=ngrok skips Cloudflare.
+ * taps "Visit Site" once (ngrok then remembers it for 7 days). TUNNEL=ngrok (env or .env) skips Cloudflare.
  */
 import { type ChildProcess, spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -83,7 +83,7 @@ function ngrok() {
 }
 
 let tunnel: { url: string; process: ChildProcess };
-if (process.env.TUNNEL === "ngrok") tunnel = await ngrok();
+if ((process.env.TUNNEL ?? fromDotenv("TUNNEL")) === "ngrok") tunnel = await ngrok();
 else {
   try {
     tunnel = await cloudflare();
