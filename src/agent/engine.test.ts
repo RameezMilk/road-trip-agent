@@ -320,3 +320,137 @@ describe("Engine end to end", () => {
     expect(chat.lastTextTo(SAM)).toContain("cancelled");
   });
 });
+
+describe("Photos", () => {
+  const PNG = { mimeType: "image/png", data: Buffer.from("fake-png") };
+
+  async function sendPhoto(handle: string): Promise<void> {
+    await engine.receive({
+      messageId: `m${++counter}`,
+      handle,
+      chatId: `any;-;${handle}`,
+      text: "",
+      receivedAt: now,
+      image: PNG,
+    });
+    await engine.settled();
+  }
+
+  /** Both members' must-haves done; Sam hasn't readied up, so the trip stays in planning. */
+  async function planningWithMustHaves(): Promise<string> {
+    await onboard();
+    await plan();
+    return (await tripOf(ALEX)).id;
+  }
+
+  it("turns a screenshot of a post into a 'visit' wish while planning", async () => {
+    const tripId = await planningWithMustHaves();
+    llm.on("image_interpretation", {
+      kind: "place",
+      placeName: "Gypsy Queen Cuisine",
+      city: "Asheville, NC",
+      description: "Lebanese food truck praised for its falafel.",
+      category: "food",
+    });
+    await sendPhoto(SAM);
+    expect(chat.textsTo(SAM).at(-2)).toContain("taking a look");
+    expect(chat.lastTextTo(SAM)).toContain(
+      "📸 Lebanese food truck praised for its falafel. Added to your wishes: “Visit Gypsy Queen Cuisine, Asheville, NC”.",
+    );
+    expect(llm.calls.at(-1)).toMatchObject({ task: "image_interpretation", images: 1 });
+    expect((await repo.listOptional(tripId)).map((r) => r.text)).toContain("Visit Gypsy Queen Cuisine, Asheville, NC");
+  });
+
+  it("turns a photo of a view into a 'stops similar to' wish, without double-counting the caption", async () => {
+    const tripId = await planningWithMustHaves();
+    llm.on("image_interpretation", {
+      kind: "scene",
+      placeName: null,
+      city: null,
+      description: "Tall forest waterfall with a swimming hole",
+      category: "activities",
+    });
+    await sendPhoto(SAM);
+    expect(chat.lastTextTo(SAM)).toContain("I'll look for stops like that");
+    llm.set("optional_extraction", { requirements: [], awaitingPhoto: false });
+    await say(SAM, "try to include stops similar to this");
+    const wishes = (await repo.listOptional(tripId)).map((r) => r.text);
+    expect(wishes.filter((w) => w.startsWith("Include stops similar to"))).toEqual([
+      "Include stops similar to: Tall forest waterfall with a swimming hole",
+    ]);
+    expect(chat.lastTextTo(SAM)).not.toContain("Noted");
+  });
+
+  it("asks for the picture when the caption comes first, and ignores unrelated images", async () => {
+    const tripId = await planningWithMustHaves();
+    const before = (await repo.listOptional(tripId)).length;
+    llm.set("optional_extraction", { requirements: [], awaitingPhoto: true });
+    await say(SAM, "try to include stops similar to this");
+    expect(chat.lastTextTo(SAM)).toContain("Send the picture");
+
+    llm.on("image_interpretation", {
+      kind: "unrelated",
+      placeName: null,
+      city: null,
+      description: "A selfie",
+      category: "other",
+    });
+    await sendPhoto(SAM);
+    expect(chat.lastTextTo(SAM)).toContain("couldn't spot a place");
+    expect(await repo.listOptional(tripId)).toHaveLength(before);
+  });
+
+  it("turns a photo into itinerary feedback during review, and declines photos on the road", async () => {
+    await onboard();
+    await plan();
+    await say(SAM, "ready");
+    await say(ALEX, "1");
+    await say(SAM, "1");
+    await say(ALEX, "1");
+    llm.on("conflict_analysis", (req: LlmRequest<unknown>) => ({
+      adoptedRequirementIds: idsIn(req.prompt).map((r) => r.id),
+      polls: [],
+    }));
+    llm.on("itinerary_draft", DRAFT);
+    await say(SAM, "1");
+    expect((await tripOf(ALEX)).phase).toBe("review");
+
+    llm.on("image_interpretation", {
+      kind: "scene",
+      placeName: null,
+      city: null,
+      description: "Mountain overlook at sunset",
+      category: "stops",
+    });
+    llm.on("feedback_assessment", {
+      impact: "minor",
+      summary: "Add a sunset overlook",
+      instruction: "Add a mountain overlook stop near sunset",
+      pollQuestion: null,
+      pollOptions: [],
+    });
+    await sendPhoto(ALEX);
+    const feedbackCall = llm.calls.find((c) => c.task === "feedback_assessment");
+    expect(feedbackCall?.prompt).toContain("Add stops similar to: Mountain overlook at sunset");
+    expect(chat.textsTo(ALEX)).toContain("📸 Mountain overlook at sunset.");
+    expect((await tripOf(ALEX)).currentVersion).toBe(2);
+
+    // A caption sent before its photo waits for the photo instead of replanning.
+    llm.set("feedback_assessment", {
+      impact: "minor",
+      summary: "",
+      instruction: "",
+      pollQuestion: null,
+      pollOptions: [],
+      awaitingPhoto: true,
+    });
+    await say(ALEX, "add something like this");
+    expect(chat.lastTextTo(ALEX)).toContain("Send the picture");
+    expect((await tripOf(ALEX)).currentVersion).toBe(2);
+
+    const trip = await tripOf(ALEX);
+    await repo.transition(trip.id, "review", "execution");
+    await sendPhoto(ALEX);
+    expect(chat.lastTextTo(ALEX)).toContain("while we're planning or reviewing");
+  });
+});

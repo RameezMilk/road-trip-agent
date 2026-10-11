@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, ne } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, max, ne, sql } from "drizzle-orm";
 import {
   CardRef,
   type ChatEvent,
@@ -24,6 +24,19 @@ import * as t from "./schema";
 type TripRow = typeof t.trips.$inferSelect;
 type MemberRow = typeof t.members.$inferSelect;
 type PollRow = typeof t.polls.$inferSelect;
+
+/** Inbound message kinds that count as a member answering the agent (not read receipts or reactions). */
+const REPLY_KINDS = ["text", "attachment", "voice"];
+
+export interface ReminderState {
+  /** Their last reply in the window. */
+  lastInboundAt: Date | null;
+  /** The agent's first message to them after that reply, i.e. the one they haven't answered. */
+  anchorAt: Date | null;
+  /** Reminders sent since their last reply. */
+  reminderCount: number;
+  lastReminderAt: Date | null;
+}
 
 function toTrip(row: TripRow): Trip {
   return {
@@ -424,8 +437,101 @@ export class Repo {
     return rows.length > 0;
   }
 
-  async recordTripEvent(tripId: string, type: string, payload: Record<string, unknown>): Promise<void> {
-    await this.db.insert(t.tripEvents).values({ eventId: newId("evt"), occurredAt: new Date(), tripId, type, payload });
+  async recordTripEvent(
+    tripId: string,
+    type: string,
+    payload: Record<string, unknown>,
+    occurredAt: Date = new Date(),
+  ): Promise<void> {
+    await this.db.insert(t.tripEvents).values({ eventId: newId("evt"), occurredAt, tripId, type, payload });
+  }
+
+  /** When the trip last entered `phase` (from the `trip_events` hypertable), or null if never recorded. */
+  async phaseStartedAt(tripId: string, phase: TripPhase): Promise<Date | null> {
+    const [row] = await this.db
+      .select({ at: t.tripEvents.occurredAt })
+      .from(t.tripEvents)
+      .where(
+        and(
+          eq(t.tripEvents.tripId, tripId),
+          eq(t.tripEvents.type, "phase_changed"),
+          sql`${t.tripEvents.payload}->>'to' = ${phase}`,
+        ),
+      )
+      .orderBy(desc(t.tripEvents.occurredAt))
+      .limit(1);
+    return row?.at ?? null;
+  }
+
+  /**
+   * Per member, who spoke last since `since`, read from the hypertables: their last reply (`chat_events`
+   * inbound), the agent's first message to them after it (`anchorAt` — what they haven't answered), and the
+   * reminders already sent after it (`trip_events` `reminder_sent`). Every query is bounded by trip and time,
+   * so on Tiger Data only the recent chunks are scanned.
+   */
+  async reminderState(tripId: string, since: Date): Promise<Map<string, ReminderState>> {
+    const inbound = await this.db
+      .select({ memberId: t.chatEvents.memberId, at: max(t.chatEvents.occurredAt) })
+      .from(t.chatEvents)
+      .where(
+        and(
+          eq(t.chatEvents.tripId, tripId),
+          eq(t.chatEvents.direction, "inbound"),
+          inArray(t.chatEvents.kind, REPLY_KINDS),
+          isNotNull(t.chatEvents.memberId),
+          gte(t.chatEvents.occurredAt, since),
+        ),
+      )
+      .groupBy(t.chatEvents.memberId);
+    const outbound = await this.db
+      .select({ memberId: t.chatEvents.memberId, at: t.chatEvents.occurredAt })
+      .from(t.chatEvents)
+      .where(
+        and(
+          eq(t.chatEvents.tripId, tripId),
+          eq(t.chatEvents.direction, "outbound"),
+          isNotNull(t.chatEvents.memberId),
+          gte(t.chatEvents.occurredAt, since),
+        ),
+      )
+      .orderBy(asc(t.chatEvents.occurredAt));
+    const reminders = await this.db
+      .select({ payload: t.tripEvents.payload, at: t.tripEvents.occurredAt })
+      .from(t.tripEvents)
+      .where(
+        and(
+          eq(t.tripEvents.tripId, tripId),
+          eq(t.tripEvents.type, "reminder_sent"),
+          gte(t.tripEvents.occurredAt, since),
+        ),
+      )
+      .orderBy(asc(t.tripEvents.occurredAt));
+
+    const states = new Map<string, ReminderState>();
+    const stateOf = (memberId: string) => {
+      let s = states.get(memberId);
+      if (!s) {
+        s = { lastInboundAt: null, anchorAt: null, reminderCount: 0, lastReminderAt: null };
+        states.set(memberId, s);
+      }
+      return s;
+    };
+    for (const r of inbound) if (r.memberId && r.at) stateOf(r.memberId).lastInboundAt = new Date(r.at);
+    const after = (s: ReminderState, at: Date) => !s.lastInboundAt || at > s.lastInboundAt;
+    for (const r of outbound) {
+      if (!r.memberId) continue;
+      const s = stateOf(r.memberId);
+      if (!s.anchorAt && after(s, r.at)) s.anchorAt = r.at;
+    }
+    for (const r of reminders) {
+      const memberId = r.payload.memberId;
+      if (typeof memberId !== "string") continue;
+      const s = stateOf(memberId);
+      if (!after(s, r.at)) continue;
+      s.reminderCount += 1;
+      s.lastReminderAt = r.at;
+    }
+    return states;
   }
 
   /**

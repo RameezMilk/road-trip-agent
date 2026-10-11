@@ -9,6 +9,7 @@ import { KeyedQueue } from "./keyed-queue";
 import * as execution from "./phases/execution";
 import * as onboarding from "./phases/onboarding";
 import * as planning from "./phases/planning";
+import * as reminders from "./phases/reminders";
 import * as review from "./phases/review";
 import * as status from "./phases/status";
 import * as voting from "./phases/voting";
@@ -41,6 +42,8 @@ export interface Inbound {
   chatId: string;
   text: string;
   receivedAt: Date;
+  /** A photo the member sent (bytes are passed to Gemini, never stored). */
+  image?: { mimeType: string; data: Buffer };
 }
 
 export interface Ctx {
@@ -66,6 +69,8 @@ export class Engine {
   readonly log: Log;
   private readonly background = new Set<Promise<unknown>>();
   private readonly draftJobs = new Set<string>();
+  private reminderTimer: ReturnType<typeof setInterval> | null = null;
+  private reminderSweeping = false;
 
   constructor(deps: EngineDeps) {
     this.repo = deps.repo;
@@ -116,6 +121,7 @@ export class Engine {
       await this.repo.updateMember(ctx.member.id, { chatId: msg.chatId });
       ctx.member = { ...ctx.member, chatId: msg.chatId };
     }
+    if (msg.image) return this.handlePhoto(ctx);
 
     switch (command?.name) {
       case "newtrip":
@@ -151,6 +157,21 @@ export class Engine {
         return execution.handle(this, ctx);
       case "aborted":
         return this.reply(ctx, copy.tripAborted(ctx.trip));
+    }
+  }
+
+  /** Photos count while planning (they become wishes) and reviewing (they become feedback). */
+  private async handlePhoto(ctx: Ctx): Promise<void> {
+    switch (ctx.trip.phase) {
+      case "planning":
+        return planning.capturePhoto(this, ctx);
+      case "review": {
+        const open = (await this.repo.listPolls(ctx.trip.id)).find((p) => p.status === "open");
+        if (open) return this.reply(ctx, copy.pollText(open, open.round > 1));
+        return review.photoFeedback(this, ctx);
+      }
+      default:
+        return this.reply(ctx, copy.photoNotNow());
     }
   }
 
@@ -281,6 +302,44 @@ export class Engine {
   /** On boot: trips left in `drafting` by a restart get their draft restarted. */
   async resumeDrafting(): Promise<void> {
     for (const trip of await this.repo.listTripsInPhase("drafting")) this.startDraftJob(trip.id, null);
+  }
+
+  // --- reminders ---------------------------------------------------------------------------------
+
+  /**
+   * Every `intervalMs`, sends the exponential-backoff reminders that are due (see `phases/reminders.ts`).
+   * Each trip's sweep runs through its queue, so it never races a member's message.
+   */
+  startReminders(intervalMs = 5_000): void {
+    if (this.reminderTimer) return;
+    this.reminderTimer = setInterval(() => {
+      if (this.reminderSweeping) return;
+      this.reminderSweeping = true;
+      const tick = this.sweepReminders()
+        .catch((error) => this.log("reminder_sweep_failed", { error: String(error) }))
+        .finally(() => {
+          this.reminderSweeping = false;
+        });
+      this.track(tick);
+    }, intervalMs);
+    this.reminderTimer.unref();
+  }
+
+  stopReminders(): void {
+    if (this.reminderTimer) clearInterval(this.reminderTimer);
+    this.reminderTimer = null;
+  }
+
+  async sweepReminders(): Promise<void> {
+    for (const phase of reminders.REMINDER_PHASES) {
+      for (const trip of await this.repo.listTripsInPhase(phase)) {
+        await this.queue
+          .run(trip.id, () => reminders.sweep(this, trip.id))
+          .catch((error) => {
+            this.log("reminder_failed", { tripId: trip.id, error: String(error) });
+          });
+      }
+    }
   }
 
   // --- poll widget (HTTP) ---------------------------------------------------------------------------

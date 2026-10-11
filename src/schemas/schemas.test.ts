@@ -4,6 +4,7 @@ import {
   conflictAnalysisSchema,
   DraftStop,
   FeedbackAssessment,
+  ImageInterpretation,
   InviteCode,
   ItineraryDraft,
   liveUpdateSchema,
@@ -73,6 +74,7 @@ describe("LLM schemas stay inside Gemini's JSON-schema subset", () => {
     FeedbackAssessment,
     LiveUpdate: liveUpdateSchema(["stop_a"]),
     ReplacementStop,
+    ImageInterpretation,
   };
   for (const [name, schema] of Object.entries(schemas)) {
     it(`${name} has no oneOf/$ref/pattern`, () => {

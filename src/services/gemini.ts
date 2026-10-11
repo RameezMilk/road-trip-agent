@@ -1,6 +1,6 @@
 import { GoogleGenAI } from "@google/genai";
 import { toLlmJsonSchema } from "../schemas";
-import { type Llm, LlmError, type LlmRequest } from "./llm";
+import { type Llm, LlmError, type LlmImage, type LlmRequest } from "./llm";
 
 type Log = (event: string, data?: Record<string, unknown>) => void;
 
@@ -40,7 +40,7 @@ export class GeminiLlm implements Llm {
       result = this.parse(request, text);
       if (!result.ok) throw new LlmError(request.task, `invalid output after repair: ${result.issues}`);
     }
-    this.log("gemini_ok", { task: request.task, ms: Date.now() - started });
+    this.log("gemini_ok", { task: request.task, ms: Date.now() - started, images: request.images?.length ?? 0 });
     return result.value;
   }
 
@@ -48,7 +48,7 @@ export class GeminiLlm implements Llm {
     const interaction = await this.client.interactions.create({
       model: this.model,
       system_instruction: request.system,
-      input: prompt,
+      input: input(prompt, request.images),
       store: false,
       ...(webSearch ? { tools: [{ type: "google_search" as const }] } : {}),
       response_format: { type: "text", mime_type: "application/json", schema: toLlmJsonSchema(request.schema) },
@@ -62,7 +62,7 @@ export class GeminiLlm implements Llm {
     const interaction = await this.client.interactions.create({
       model: this.model,
       system_instruction: `${request.system}\nResearch with Google Search and answer in concise plain-text notes.`,
-      input: request.prompt,
+      input: input(request.prompt, request.images),
       store: false,
       tools: [{ type: "google_search" as const }],
     });
@@ -90,6 +90,15 @@ export class GeminiLlm implements Llm {
   private wrap<T>(request: LlmRequest<T>, error: unknown): Error {
     return error instanceof LlmError ? error : new LlmError(request.task, String(error));
   }
+}
+
+/** Plain text, or text followed by the member's images as inline parts. */
+export function input(prompt: string, images: LlmImage[] | undefined) {
+  if (!images?.length) return prompt;
+  return [
+    { type: "text" as const, text: prompt },
+    ...images.map((i) => ({ type: "image" as const, data: i.base64, mime_type: i.mimeType })),
+  ];
 }
 
 const ENTITIES: Record<string, string> = {

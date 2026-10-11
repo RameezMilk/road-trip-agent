@@ -91,6 +91,7 @@ const server = serve({ fetch: app.fetch, port: config.PORT }, (info) =>
 
 if (spectrum) {
   await engine.resumeDrafting();
+  engine.startReminders();
   runChatLoop({ messages: spectrum.messages(), engine, repo, log }).catch((error) => {
     log("chat_loop_crashed", { error: String(error) });
     process.exit(1);
@@ -106,6 +107,7 @@ async function shutdown(signal: string) {
   if (stopping) process.exit(1);
   stopping = true;
   log("shutdown", { signal, draining: true });
+  engine.stopReminders();
   await Promise.race([engine.settled(), new Promise((resolve) => setTimeout(resolve, 90_000))]);
   log("shutdown_drained");
   server.close();

@@ -10,9 +10,11 @@ import {
   RequirementText,
   Usd,
 } from "../../schemas";
-import { SYSTEM } from "../../services/prompts";
+import { LlmError } from "../../services/llm";
+import { conversationBlock, SYSTEM } from "../../services/prompts";
 import { copy, FIELD_LABELS } from "../copy";
 import type { Ctx, Engine } from "../engine";
+import { interpretPhoto } from "./photo";
 import { begin as beginVoting } from "./voting";
 
 export async function startPlanning(e: Engine, tripId: string): Promise<void> {
@@ -183,12 +185,14 @@ export function mergePredefined(
 async function captureOptional(e: Engine, ctx: Ctx): Promise<void> {
   let items: Array<{ category: OptionalExtraction["requirements"][number]["category"]; text: string }> = [];
   try {
+    const history = await e.repo.recentConversation(ctx.member.id, ctx.msg.messageId).catch(() => []);
     const out = await e.llm.generate({
       task: "optional_extraction",
       system: SYSTEM.optionalExtraction,
-      prompt: `Traveler's message: """${ctx.msg.text}"""`,
+      prompt: `${conversationBlock(history)}Traveler's message: """${ctx.msg.text}"""`,
       schema: OptionalExtraction,
     });
+    if (out.awaitingPhoto && !out.requirements.length) return void (await e.reply(ctx, copy.sendThePhoto()));
     items = out.requirements;
   } catch (error) {
     e.log("optional_extraction_failed", { error: String(error) });
@@ -210,6 +214,36 @@ async function captureOptional(e: Engine, ctx: Ctx): Promise<void> {
     saved.push(text.data);
   }
   await e.reply(ctx, saved.length ? copy.optionalNoted(saved) : copy.optionalNothing());
+}
+
+/** A photo while planning: a post about a place becomes "Visit X", a view becomes "stops similar to …". */
+export async function capturePhoto(e: Engine, ctx: Ctx): Promise<void> {
+  await e.reply(ctx, copy.photoLooking());
+  const reqs = await e.repo.getPredefined(ctx.member.id);
+  const trip = `${reqs.startLocation ?? "start not set yet"} → ${reqs.endLocation ?? "destination not set yet"}`;
+  let reading: Awaited<ReturnType<typeof interpretPhoto>>;
+  try {
+    reading = await interpretPhoto(e, ctx, trip);
+  } catch (error) {
+    if (!(error instanceof LlmError)) throw error;
+    e.log("image_interpretation_failed", { error: String(error) });
+    return void (await e.reply(ctx, copy.couldNot("I couldn't read that picture right now")));
+  }
+  const { interpretation: it, wish } = reading;
+  if (!wish) return void (await e.reply(ctx, copy.photoUnclear()));
+
+  await e.repo.addOptional({
+    id: newId("req"),
+    tripId: ctx.trip.id,
+    memberId: ctx.member.id,
+    category: it.category,
+    text: wish,
+    sourceEventId: ctx.msg.messageId,
+  });
+  const description = it.description.trim().replace(/[.\s]+$/, "");
+  const noted = it.kind === "place" ? copy.photoWish(description, wish) : copy.photoScene(description, wish);
+  const [next] = missingFields(reqs);
+  await e.reply(ctx, `${noted}\n${next ? copy.question(next) : copy.photoAnythingElse()}`);
 }
 
 async function ready(e: Engine, ctx: Ctx): Promise<void> {

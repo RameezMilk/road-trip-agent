@@ -28,8 +28,16 @@ export interface InboundEvent {
   kind: InboundKind;
   text: string | null;
   occurredAt: Date;
+  /** Set for image attachments; the bytes are fetched from Photon only when the agent uses them. */
+  image: InboundImage | null;
   /** Ready to store; tripId/memberId are filled in by the runtime. */
   event: ChatEvent;
+}
+
+export interface InboundImage {
+  mimeType: string;
+  size: number | null;
+  read: () => Promise<Buffer>;
 }
 
 const CORE_KEYS = new Set(["id", "content", "direction", "platform", "sender", "space", "timestamp"]);
@@ -183,6 +191,7 @@ export async function toInbound(space: Space, message: Message): Promise<Inbound
     kind: described.kind,
     text: described.text === null ? null : clean(described.text),
     occurredAt: message.timestamp instanceof Date ? message.timestamp : new Date(),
+    image: described.image ?? null,
     event: {
       eventId: message.id,
       occurredAt: message.timestamp instanceof Date ? message.timestamp : new Date(),
@@ -201,18 +210,21 @@ export async function toInbound(space: Space, message: Message): Promise<Inbound
 
 async function describeContent(
   c: Message["content"],
-): Promise<{ kind: InboundKind; text: string | null; content: Record<string, unknown> }> {
+): Promise<{ kind: InboundKind; text: string | null; content: Record<string, unknown>; image?: InboundImage }> {
   switch (c.type) {
     case "text":
       return { kind: "text", text: c.text, content: { type: "text" } };
     case "markdown":
       return { kind: "text", text: c.markdown, content: { type: "markdown" } };
     case "attachment":
-      // Metadata only — bytes stay with Photon.
+      // Metadata only is stored — bytes stay with Photon until an image is handed to Gemini.
       return {
         kind: "attachment",
         text: null,
         content: { type: "attachment", name: c.name, mimeType: c.mimeType, size: c.size ?? null },
+        ...(c.mimeType.toLowerCase().startsWith("image/")
+          ? { image: { mimeType: c.mimeType.toLowerCase(), size: c.size ?? null, read: () => c.read() } }
+          : {}),
       };
     case "voice":
       return {

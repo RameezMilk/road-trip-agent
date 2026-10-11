@@ -10,6 +10,7 @@ export const LlmTask = z.enum([
   "feedback_assessment",
   "live_update",
   "replacement_stop",
+  "image_interpretation",
 ]);
 export type LlmTask = z.infer<typeof LlmTask>;
 
@@ -20,6 +21,13 @@ export interface LlmRequest<T> {
   schema: z.ZodType<T>;
   /** Ground the answer with Google Search (place lookups). */
   webSearch?: boolean;
+  /** Images the member sent, sent to Gemini alongside the prompt (never stored). */
+  images?: LlmImage[];
+}
+
+export interface LlmImage {
+  mimeType: string;
+  base64: string;
 }
 
 /** Structured generation: the result has already passed `schema` (LLM output is untrusted). */
