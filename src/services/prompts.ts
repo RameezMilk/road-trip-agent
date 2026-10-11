@@ -48,7 +48,8 @@ Return JSON matching the schema. Rules:
 - dwellMinutes: time spent at the stop.
 - sustainable: true for low-carbon activities (parks, hikes, walking tours, farm-to-table, local markets, EV charging).
 - estCostPerPersonUsd: rough per-person cost from your research, or null. sourceUrl: the page you used, or null.
-- Never state distances or drive times; code computes them from real routing.`,
+- Never state distances or drive times; code computes them from real routing.
+- Be quick: use at most 3 Google searches in total, then answer.`,
 
   feedbackAssessment: `A member of a road-trip group sent feedback on the proposed itinerary. Classify its impact:
 - "minor": a small tweak that keeps everyone's preferences and does not materially change schedule, budget or driving time (e.g. swap a restaurant for a similar one, 15 more minutes somewhere).

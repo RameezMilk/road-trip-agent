@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { estimateLeg } from "../domain/geo";
+import { estimateLeg, haversineMeters } from "../domain/geo";
 import { LatLng, type RouteLeg } from "../schemas";
 
 export interface GeocodeResult {
@@ -96,6 +96,8 @@ const PhotonResponse = z.object({
 });
 
 const STATE_CODE = /^[A-Z]{2}$/i;
+/** A named place counts as "in" a city if it's this close to the city's centre (parks, visitor centres). */
+const NEAR_CITY_METERS = 30_000;
 const norm = (s: string | undefined) =>
   (s ?? "")
     .toLowerCase()
@@ -103,32 +105,60 @@ const norm = (s: string | undefined) =>
     .replace(/\s+/g, " ")
     .trim();
 
-/** Does a Photon hit really answer "Name, City, ST"? (It happily returns a same-name place in another city.) */
-export function photonHitMatches(query: string, p: z.infer<typeof PhotonResponse>["features"][number]["properties"]) {
-  if (p.countrycode && p.countrycode.toUpperCase() !== "US") return false;
+const STREET_NOISE = new Set(
+  "n s e w north south east west nw ne sw se st street ave avenue rd road dr drive blvd boulevard hwy highway pkwy parkway ln lane way ct court pl place cir circle us nc sc va i".split(
+    " ",
+  ),
+);
+const streetWords = (s: string) =>
+  norm(s)
+    .split(" ")
+    .filter((w) => w.length > 1 && !STREET_NOISE.has(w) && !/^\d+$/.test(w));
+
+/** "Name, City, ST" → the city part ("City, ST"), if the query names one. */
+export function cityOf(query: string): string | null {
   const segments = query
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
-  const head = norm(segments[0]);
-  const citySegment =
-    segments.length >= 3
-      ? segments[segments.length - 2]
-      : segments.length === 2 && !STATE_CODE.test(segments[1] ?? "")
-        ? segments[1]
-        : undefined;
-  if (!head) return false;
+  if (segments.length >= 3) return segments.slice(-2).join(", ");
+  if (segments.length === 2 && !STATE_CODE.test(segments[1] ?? "")) return segments[1] ?? null;
+  return null;
+}
+
+/**
+ * Does a Photon hit really answer "Name, City, ST"? (It happily returns a same-name place in another city.)
+ * "match": name (or street + house number) and city agree. "check_distance": the name agrees but the hit
+ * carries no matching city (often just a county), so the caller checks it's near the city. "no": reject.
+ */
+export function photonHitMatches(
+  query: string,
+  p: z.infer<typeof PhotonResponse>["features"][number]["properties"],
+): "match" | "check_distance" | "no" {
+  if (p.countrycode && p.countrycode.toUpperCase() !== "US") return "no";
+  const head = norm(query.split(",")[0]);
+  if (!head) return "no";
   const name = norm(p.name);
-  const headMatches = /^\d/.test(head)
-    ? Boolean(p.street && head.includes(norm(p.street).split(" ")[0] ?? "~"))
-    : Boolean(name && (name.includes(head) || head.includes(name)));
-  if (!headMatches) return false;
-  if (!citySegment) return true;
-  const city = norm(citySegment);
-  return [p.city, p.county, p.district, p.name].some((v) => {
+  const nameMatches = Boolean(name && (name.includes(head) || (head.includes(name) && name.split(" ").length >= 2)));
+  let headMatches = nameMatches;
+  if (!headMatches && /^\d/.test(head) && p.street) {
+    // "1208 W Wendover Ave": same street words and, if the hit has one, the same house number.
+    const number = head.match(/^(\d+)/)?.[1];
+    const words = streetWords(p.street);
+    headMatches =
+      words.length > 0 &&
+      words.every((w) => head.includes(w)) &&
+      (!p.housenumber || p.housenumber.split(/\s/)[0] === number);
+  }
+  if (!headMatches) return "no";
+  const city = cityOf(query);
+  if (!city) return "match";
+  const cityName = norm(city.split(",")[0]);
+  const sameCity = [p.city, p.district, p.name].some((v) => {
     const n = norm(v);
-    return n && (n === city || n.includes(city) || city.includes(n));
+    return Boolean(n && (n === cityName || n.includes(cityName) || cityName.includes(n)));
   });
+  return sameCity ? "match" : "check_distance";
 }
 
 /**
@@ -169,8 +199,14 @@ export class PhotonGeocoder implements Geocoder {
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const [feature] = PhotonResponse.parse(await res.json()).features;
-      if (!feature || !photonHitMatches(query, feature.properties)) return null;
+      const verdict = feature ? photonHitMatches(query, feature.properties) : "no";
+      if (!feature || verdict === "no") return null;
       const [lng, lat] = feature.geometry.coordinates;
+      if (verdict === "check_distance") {
+        const city = cityOf(query);
+        const anchor = city ? await this.geocode(city) : null;
+        if (!anchor || haversineMeters(anchor.latLng, { lat, lng }) > NEAR_CITY_METERS) return null;
+      }
       const p = feature.properties;
       const displayName = [
         p.name,
