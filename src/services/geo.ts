@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { estimateLeg } from "../domain/geo";
+import { estimateLeg, haversineMeters } from "../domain/geo";
 import { LatLng, type RouteLeg } from "../schemas";
 
 export interface GeocodeResult {
@@ -72,6 +72,172 @@ export class NominatimGeocoder implements Geocoder {
       this.log("geocode_failed", { query, error: String(error) });
       return null;
     }
+  }
+}
+
+const PhotonResponse = z.object({
+  features: z.array(
+    z.object({
+      geometry: z.object({ coordinates: z.tuple([z.number(), z.number()]) }),
+      properties: z
+        .object({
+          name: z.string().optional(),
+          housenumber: z.string().optional(),
+          street: z.string().optional(),
+          city: z.string().optional(),
+          county: z.string().optional(),
+          district: z.string().optional(),
+          state: z.string().optional(),
+          countrycode: z.string().optional(),
+        })
+        .loose(),
+    }),
+  ),
+});
+
+const STATE_CODE = /^[A-Z]{2}$/i;
+/** A named place counts as "in" a city if it's this close to the city's centre (parks, visitor centres). */
+const NEAR_CITY_METERS = 30_000;
+const norm = (s: string | undefined) =>
+  (s ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const STREET_NOISE = new Set(
+  "n s e w north south east west nw ne sw se st street ave avenue rd road dr drive blvd boulevard hwy highway pkwy parkway ln lane way ct court pl place cir circle us nc sc va i".split(
+    " ",
+  ),
+);
+const streetWords = (s: string) =>
+  norm(s)
+    .split(" ")
+    .filter((w) => w.length > 1 && !STREET_NOISE.has(w) && !/^\d+$/.test(w));
+
+/** "Name, City, ST" → the city part ("City, ST"), if the query names one. */
+export function cityOf(query: string): string | null {
+  const segments = query
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (segments.length >= 3) return segments.slice(-2).join(", ");
+  if (segments.length === 2 && !STATE_CODE.test(segments[1] ?? "")) return segments[1] ?? null;
+  return null;
+}
+
+/**
+ * Does a Photon hit really answer "Name, City, ST"? (It happily returns a same-name place in another city.)
+ * "match": name (or street + house number) and city agree. "check_distance": the name agrees but the hit
+ * carries no matching city (often just a county), so the caller checks it's near the city. "no": reject.
+ */
+export function photonHitMatches(
+  query: string,
+  p: z.infer<typeof PhotonResponse>["features"][number]["properties"],
+): "match" | "check_distance" | "no" {
+  if (p.countrycode && p.countrycode.toUpperCase() !== "US") return "no";
+  const head = norm(query.split(",")[0]);
+  if (!head) return "no";
+  const name = norm(p.name);
+  const nameMatches = Boolean(name && (name.includes(head) || (head.includes(name) && name.split(" ").length >= 2)));
+  let headMatches = nameMatches;
+  if (!headMatches && /^\d/.test(head) && p.street) {
+    // "1208 W Wendover Ave": same street words and, if the hit has one, the same house number.
+    const number = head.match(/^(\d+)/)?.[1];
+    const words = streetWords(p.street);
+    headMatches =
+      words.length > 0 &&
+      words.every((w) => head.includes(w)) &&
+      (!p.housenumber || p.housenumber.split(/\s/)[0] === number);
+  }
+  if (!headMatches) return "no";
+  const city = cityOf(query);
+  if (!city) return "match";
+  const cityName = norm(city.split(",")[0]);
+  const sameCity = [p.city, p.district, p.name].some((v) => {
+    const n = norm(v);
+    return Boolean(n && (n === cityName || n.includes(cityName) || cityName.includes(n)));
+  });
+  return sameCity ? "match" : "check_distance";
+}
+
+/**
+ * Komoot Photon (OSM data, photon.komoot.io): no 1 req/s limit, so a draft's stops are located in
+ * parallel (~0.5 s) instead of ~1.1 s each through Nominatim. Fair use: one request per stop, cached.
+ * Hits that don't match the query's name and city are treated as misses.
+ */
+export class PhotonGeocoder implements Geocoder {
+  private readonly cache = new Map<string, Promise<GeocodeResult | null>>();
+
+  constructor(
+    private readonly baseUrl: string,
+    private readonly userAgent: string,
+    private readonly fetchFn: FetchFn = fetch,
+    private readonly log: Log = () => {},
+  ) {}
+
+  geocode(query: string): Promise<GeocodeResult | null> {
+    const key = query.trim().toLowerCase();
+    if (!key) return Promise.resolve(null);
+    let hit = this.cache.get(key);
+    if (!hit) {
+      hit = this.request(query.trim());
+      this.cache.set(key, hit);
+    }
+    return hit;
+  }
+
+  private async request(query: string): Promise<GeocodeResult | null> {
+    const url = new URL("/api/", this.baseUrl);
+    url.searchParams.set("q", query);
+    url.searchParams.set("limit", "1");
+    url.searchParams.set("lang", "en");
+    try {
+      const res = await this.fetchFn(url, {
+        headers: { "User-Agent": this.userAgent, Accept: "application/json" },
+        signal: AbortSignal.timeout(4000),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const [feature] = PhotonResponse.parse(await res.json()).features;
+      const verdict = feature ? photonHitMatches(query, feature.properties) : "no";
+      if (!feature || verdict === "no") return null;
+      const [lng, lat] = feature.geometry.coordinates;
+      if (verdict === "check_distance") {
+        const city = cityOf(query);
+        const anchor = city ? await this.geocode(city) : null;
+        if (!anchor || haversineMeters(anchor.latLng, { lat, lng }) > NEAR_CITY_METERS) return null;
+      }
+      const p = feature.properties;
+      const displayName = [
+        p.name,
+        p.housenumber && p.street ? `${p.housenumber} ${p.street}` : p.street,
+        p.city,
+        p.state,
+      ]
+        .filter(Boolean)
+        .join(", ");
+      return { latLng: LatLng.parse({ lat, lng }), displayName: displayName || query };
+    } catch (error) {
+      this.log("photon_failed", { query, error: String(error) });
+      return null;
+    }
+  }
+}
+
+/** Tries each geocoder in order (Photon first for speed, then rate-limited Nominatim). */
+export class FallbackGeocoder implements Geocoder {
+  private readonly geocoders: Geocoder[];
+
+  constructor(...geocoders: Geocoder[]) {
+    this.geocoders = geocoders;
+  }
+
+  async geocode(query: string): Promise<GeocodeResult | null> {
+    for (const g of this.geocoders) {
+      const hit = await g.geocode(query);
+      if (hit) return hit;
+    }
+    return null;
   }
 }
 

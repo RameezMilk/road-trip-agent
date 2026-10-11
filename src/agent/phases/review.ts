@@ -2,9 +2,9 @@ import { diffItineraries, formatDiff } from "../../domain/diff";
 import { option, withAbstain } from "../../domain/reconcile";
 import { FeedbackAssessment, type Itinerary, type Poll, type PollOption, type TripPhase } from "../../schemas";
 import { conversationBlock, itineraryBlock, requirementsBlock, SYSTEM } from "../../services/prompts";
-import { copy, formatItinerary } from "../copy";
+import { copy } from "../copy";
 import type { Ctx, Engine } from "../engine";
-import { begin as beginExecution } from "./execution";
+import { begin as beginExecution, launch } from "./execution";
 import { castFromText, sendPoll } from "./voting";
 
 /** A requested change to the current itinerary. */
@@ -26,6 +26,7 @@ export async function startDrafting(
   if (!(await e.repo.transition(tripId, from, "drafting"))) return;
   await e.broadcast(tripId, copy.drafting(revision !== null));
   e.startDraftJob(tripId, revision);
+  for (const m of await e.joinedMembers(tripId)) e.typing(e.recipient(m));
 }
 
 export async function draftItinerary(e: Engine, tripId: string, revision: Revision | null): Promise<Itinerary> {
@@ -33,7 +34,7 @@ export async function draftItinerary(e: Engine, tripId: string, revision: Revisi
   if (!trip?.resolved) throw new Error("trip has no resolved requirements");
   const previous = await e.currentItinerary(trip);
   const members = await e.joinedMembers(tripId);
-  return e.planner.draft({
+  const input = {
     tripId,
     version: trip.currentVersion + 1,
     title: trip.title,
@@ -41,7 +42,17 @@ export async function draftItinerary(e: Engine, tripId: string, revision: Revisi
     resolved: trip.resolved,
     memberCount: members.length,
     ...(previous && revision ? { revision: { previous, instruction: revision.instruction } } : {}),
-  });
+  };
+  // First draft: research for the winning poll outcome usually started while people voted.
+  const speculative = !previous && !revision ? e.takeSpeculation(tripId, trip.resolved) : null;
+  if (speculative) {
+    const research = await speculative.catch((error) => {
+      e.log("draft_speculation_failed", { tripId, error: String(error) });
+      return null;
+    });
+    if (research) return e.planner.place(input, research);
+  }
+  return e.planner.draft(input);
 }
 
 export async function commitDraft(
@@ -61,9 +72,30 @@ export async function commitDraft(
       await e.repo.approve(tripId, itinerary.version, memberId);
     }
   }
+  const current = { ...trip, currentVersion: itinerary.version };
+
+  // Without the review step the first itinerary goes straight to the road.
+  if (!previous && !e.config.reviewStep) {
+    if (await e.repo.transition(tripId, "drafting", "execution")) await launch(e, current, itinerary);
+    return;
+  }
   if (!(await e.repo.transition(tripId, "drafting", "review"))) return;
-  const header = previous && diff ? `${copy.revisedHeader(itinerary.version, revision?.note ?? null, diff)}\n\n` : "";
-  await e.broadcast(tripId, `${header}${formatItinerary(itinerary)}\n\n${copy.reviewAsk()}`);
+  // The itinerary is never sent as text: the card shows it, and revisions get a short diff.
+  if (previous && diff) {
+    await e.broadcast(
+      tripId,
+      `${copy.revisedHeader(itinerary.version, revision?.note ?? null, diff)}\n${copy.reviewAsk()}`,
+    );
+    await e.refreshCards(current, itinerary);
+  } else {
+    await Promise.all(
+      (await e.joinedMembers(tripId)).map(async (m) => {
+        await e.sendTo(e.recipient(m), copy.itineraryReady());
+        await e.upsertCard(current, m, itinerary, true);
+        await e.sendTo(e.recipient(m), copy.reviewAsk());
+      }),
+    );
+  }
   await checkAllApproved(e, tripId);
 }
 

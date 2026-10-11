@@ -3,6 +3,7 @@ import type { z } from "zod";
 import type { CardLayout, ChatPort, Recipient } from "../chat/port";
 import { estimateLeg } from "../domain/geo";
 import type { CardRef, LatLng, RouteLeg } from "../schemas";
+import type { ChooseQuestion, Decider, PredicateQuestion } from "../services/decisions";
 import type { GeocodeResult, Geocoder, Router } from "../services/geo";
 import { type Llm, LlmError, type LlmRequest, type LlmTask } from "../services/llm";
 
@@ -30,6 +31,38 @@ export class FakeLlm implements Llm {
   }
 }
 
+type ChooseAnswer = { value: string; confidence: number } | null;
+
+/**
+ * Scripted Decider keyed by question name. Unscripted questions return null (= unavailable), which sends
+ * callers down their Gemini fallback, exactly like running without OPENAI_API_KEY.
+ */
+export class FakeDecider implements Decider {
+  readonly asked: string[] = [];
+  private readonly choices = new Map<string, (q: ChooseQuestion) => ChooseAnswer>();
+  private readonly predicates = new Map<string, number | null>();
+
+  onChoose(name: string, answer: ChooseAnswer | ((q: ChooseQuestion) => ChooseAnswer)): this {
+    this.choices.set(name, typeof answer === "function" ? answer : () => answer);
+    return this;
+  }
+
+  onPredicate(name: string, probability: number | null): this {
+    this.predicates.set(name, probability);
+    return this;
+  }
+
+  async choose(q: ChooseQuestion): Promise<ChooseAnswer> {
+    this.asked.push(q.name);
+    return this.choices.get(q.name)?.(q) ?? null;
+  }
+
+  async predicate(q: PredicateQuestion): Promise<number | null> {
+    this.asked.push(q.name);
+    return this.predicates.get(q.name) ?? null;
+  }
+}
+
 /** Deterministic coordinates around central NC for any query; `unknown` queries can be configured to fail. */
 export class FakeGeocoder implements Geocoder {
   readonly queries: string[] = [];
@@ -54,6 +87,7 @@ export interface SentMessage {
   to: string;
   text: string | null;
   card: { url: string; layout: CardLayout; edited: boolean } | null;
+  attachment?: { path: string; mimeType: string };
 }
 
 export class FakeChat implements ChatPort {
@@ -74,6 +108,31 @@ export class FakeChat implements ChatPort {
   async editCard(to: Recipient, card: CardRef, url: string, layout: CardLayout): Promise<CardRef | null> {
     this.sent.push({ to: to.handle, text: null, card: { url, layout, edited: true } });
     return card;
+  }
+
+  readonly typingTo: string[] = [];
+
+  async sendAttachment(to: Recipient, path: string, mimeType: string): Promise<void> {
+    this.sent.push({ to: to.handle, text: null, card: null, attachment: { path, mimeType } });
+  }
+
+  async typing(to: Recipient): Promise<void> {
+    this.typingTo.push(to.handle);
+  }
+
+  /** Everything sent to a handle, as short labels: the text, "[card]", "[card edit]" or "[file name]". */
+  timeline(handle: string): string[] {
+    return this.sent
+      .filter((m) => m.to === handle)
+      .map((m) =>
+        m.text !== null
+          ? m.text
+          : m.card
+            ? m.card.edited
+              ? "[card edit]"
+              : "[card]"
+            : `[file ${m.attachment?.path.split("/").at(-1)}]`,
+      );
   }
 
   /** Texts sent to a handle since the last `take`. */

@@ -1,7 +1,9 @@
 import { helpText, parseCommand } from "../chat/commands";
-import type { CardLayout, ChatPort, Recipient } from "../chat/port";
+import { type CardLayout, type ChatPort, type NameDirectory, noNames, type Recipient } from "../chat/port";
 import type { Repo } from "../db/repo";
-import type { ChatCommand, Itinerary, Member, Trip } from "../schemas";
+import { draftKey } from "../domain/reconcile";
+import type { ChatCommand, Itinerary, ItineraryDraft, Member, ResolvedRequirements, Trip } from "../schemas";
+import { type Decider, noDecider } from "../services/decisions";
 import type { Llm } from "../services/llm";
 import type { Planner } from "../services/planner";
 import { copy } from "./copy";
@@ -21,6 +23,12 @@ export interface EngineConfig {
   timeZone: string;
   vehicleMpg: number;
   gasPriceUsdPerGallon: number;
+  /** Everyone approves the first itinerary before the trip starts (default false: straight to the road). */
+  reviewStep?: boolean;
+  /** Also send each voter a poll-widget card (default false: votes are iMessage replies). */
+  pollWidget?: boolean;
+  /** Send-off GIF (skipped when unset or missing). */
+  dapGifPath?: string | null;
 }
 
 export interface EngineDeps {
@@ -29,6 +37,10 @@ export interface EngineDeps {
   llm: Llm;
   planner: Planner;
   config: EngineConfig;
+  /** Fast constrained choices (OpenAI Decisions); defaults to none, i.e. Gemini everywhere. */
+  decider?: Decider;
+  /** First names from the chat provider (Photon users); defaults to none, i.e. the agent asks. */
+  names?: NameDirectory;
   queue?: KeyedQueue;
   clock?: () => Date;
   log?: Log;
@@ -61,11 +73,17 @@ export class Engine {
   readonly llm: Llm;
   readonly planner: Planner;
   readonly config: EngineConfig;
+  readonly decider: Decider;
+  readonly names: NameDirectory;
   readonly queue: KeyedQueue;
   readonly clock: () => Date;
   readonly log: Log;
   private readonly background = new Set<Promise<unknown>>();
   private readonly draftJobs = new Set<string>();
+  /** Speculative itinerary research per trip, keyed by `draftKey` of each possible poll outcome. */
+  private readonly speculative = new Map<string, Map<string, Promise<ItineraryDraft>>>();
+  /** "Do all of this trip's wishes fit together?" answers, so speculation and resolution agree. */
+  readonly wishChecks = new Map<string, boolean>();
 
   constructor(deps: EngineDeps) {
     this.repo = deps.repo;
@@ -73,6 +91,8 @@ export class Engine {
     this.llm = deps.llm;
     this.planner = deps.planner;
     this.config = deps.config;
+    this.decider = deps.decider ?? noDecider;
+    this.names = deps.names ?? noNames;
     this.queue = deps.queue ?? new KeyedQueue();
     this.clock = deps.clock ?? (() => new Date());
     this.log = deps.log ?? (() => {});
@@ -171,6 +191,25 @@ export class Engine {
     }
   }
 
+  /**
+   * Typing dots before slow work (Gemini, drafting). Fire-and-forget: Photon's startTyping can take 1.5 s+,
+   * which delayed every reply it preceded; every call site is followed by 2 s+ of work, so the dots still
+   * land before the reply.
+   */
+  typing(to: Recipient): void {
+    this.chat.typing?.(to).catch(() => undefined);
+  }
+
+  /** Sends a file (the send-off GIF); failures are logged, never thrown. */
+  async sendFile(to: Recipient, path: string, mimeType: string): Promise<void> {
+    if (!this.chat.sendAttachment) return;
+    try {
+      await this.chat.sendAttachment(to, path, mimeType);
+    } catch (error) {
+      this.log("send_file_failed", { to: to.memberId, error: String(error) });
+    }
+  }
+
   async reply(ctx: Ctx, text: string): Promise<void> {
     await this.sendTo(this.recipient(ctx.member), text);
   }
@@ -180,9 +219,9 @@ export class Engine {
   }
 
   async broadcast(tripId: string, text: string, exceptMemberId?: string): Promise<void> {
-    for (const m of await this.joinedMembers(tripId)) {
-      if (m.id !== exceptMemberId) await this.sendTo(this.recipient(m), text);
-    }
+    // Everyone at once: each send is a ~0.7 s round trip, and each member's own order is unchanged.
+    const members = (await this.joinedMembers(tripId)).filter((m) => m.id !== exceptMemberId);
+    await Promise.all(members.map((m) => this.sendTo(this.recipient(m), text)));
   }
 
   displayName(member: Member): string {
@@ -282,6 +321,39 @@ export class Engine {
   /** On boot: trips left in `drafting` by a restart get their draft restarted. */
   async resumeDrafting(): Promise<void> {
     for (const trip of await this.repo.listTripsInPhase("drafting")) this.startDraftJob(trip.id, null);
+  }
+
+  /**
+   * Starts Gemini research for every possible outcome of the open polls while people vote, so the
+   * winner's places are usually ready when the vote closes. Only the research is speculative: geocoding,
+   * routing and the schedule run for the winner alone.
+   */
+  speculate(trip: Trip, candidates: ResolvedRequirements[], memberCount: number): void {
+    const byKey = new Map<string, Promise<ItineraryDraft>>();
+    for (const resolved of candidates.slice(0, 4)) {
+      const key = draftKey(resolved);
+      if (byKey.has(key)) continue;
+      const research = this.planner.research({
+        tripId: trip.id,
+        version: 1,
+        title: trip.title,
+        timeZone: trip.timeZone,
+        resolved,
+        memberCount,
+      });
+      this.track(research.catch(() => undefined));
+      byKey.set(key, research);
+    }
+    this.speculative.set(trip.id, byKey);
+    this.log("draft_speculation_started", { tripId: trip.id, candidates: byKey.size });
+  }
+
+  /** The speculative research matching the final requirements, if any; the trip's cache is cleared. */
+  takeSpeculation(tripId: string, resolved: ResolvedRequirements): Promise<ItineraryDraft> | null {
+    const research = this.speculative.get(tripId)?.get(draftKey(resolved)) ?? null;
+    this.speculative.delete(tripId);
+    this.log(research ? "draft_speculation_hit" : "draft_speculation_miss", { tripId });
+    return research;
   }
 
   // --- poll widget (HTTP) ---------------------------------------------------------------------------

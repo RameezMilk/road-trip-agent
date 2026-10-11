@@ -1,6 +1,8 @@
 // Poll widget: the capability token in the URL identifies (poll, member); it was sent only in that
 // member's own DM. Options post their id; "Other" text is mapped to the closest option by the agent.
 (() => {
+  // Skips ngrok's free-tier browser warning on API calls (harmless behind any other tunnel).
+  const SKIP_WARNING = { "ngrok-skip-browser-warning": "1" };
   const token = location.pathname.split("/").filter(Boolean)[1] ?? "";
   const $ = (id) => document.getElementById(id);
   const esc = (s) =>
@@ -10,7 +12,7 @@
     );
 
   async function load() {
-    const res = await fetch(`/api/polls/${encodeURIComponent(token)}`, { cache: "no-store" });
+    const res = await fetch(`/api/polls/${encodeURIComponent(token)}`, { cache: "no-store", headers: SKIP_WARNING });
     if (!res.ok) {
       $("question").textContent = "This vote link isn't valid.";
       $("submit").disabled = true;
@@ -47,7 +49,7 @@
     try {
       const res = await fetch(`/api/polls/${encodeURIComponent(token)}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...SKIP_WARNING },
         body: JSON.stringify(body),
       });
       const result = await res.json();

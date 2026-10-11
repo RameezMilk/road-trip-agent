@@ -2,7 +2,7 @@ import { isRecipientNotAllowed } from "../../chat/port";
 import { type ChatCommand, FirstName, type Trip } from "../../schemas";
 import { copy } from "../copy";
 import type { Ctx, Engine, Inbound } from "../engine";
-import { startPlanning } from "./planning";
+import { nextQuestion, startPlanning, syncHostStart } from "./planning";
 
 const NAME_PREFIX = /^(?:hi|hey|hello)?[\s,!]*(?:i'?m|i am|my name is|my name's|it'?s|call me|this is|name'?s)\s+/i;
 
@@ -22,15 +22,25 @@ export function parseFirstName(text: string): string | null {
 /** A sender who isn't in any active trip yet. */
 export async function handleOutsider(e: Engine, msg: Inbound, command: ChatCommand | null): Promise<void> {
   const to = { handle: msg.handle, chatId: msg.chatId, memberId: null, tripId: null };
+  // Photon usually knows the sender's first name (from the project's users), so most people aren't asked.
+  const knownName = command?.name === "newtrip" || command?.name === "join" ? e.names.firstName(msg.handle) : null;
   if (command?.name === "newtrip") {
     const { trip, host } = await e.repo.createTrip({
       title: command.title ?? "Road trip",
       timeZone: e.config.timeZone,
       hostHandle: msg.handle,
       hostChatId: msg.chatId,
+      phase: "planning",
     });
     await e.repo.recordTripEvent(trip.id, "trip_created", { hostId: host.id });
-    await e.sendTo(e.recipient(host), copy.tripCreated(trip));
+    // Three bubbles: the join message stands alone so the host can forward it as-is.
+    await e.sendTo(e.recipient(host), copy.tripCreated());
+    await e.sendTo(e.recipient(host), copy.joinMessage(trip));
+    const name = await knownName;
+    if (!name) return void (await e.sendTo(e.recipient(host), copy.askName()));
+    await e.repo.updateMember(host.id, { name });
+    const question = nextQuestion(await e.repo.getPredefined(host.id), true) ?? copy.askWish();
+    await e.sendTo(e.recipient(host), copy.hello(name, question));
     return;
   }
 
@@ -38,7 +48,7 @@ export async function handleOutsider(e: Engine, msg: Inbound, command: ChatComma
     let target: { trip: Trip; memberId: string } | null = null;
     if (command.code) {
       const trip = await e.repo.getTripByInviteCode(command.code);
-      if (trip?.phase !== "onboarding") {
+      if (trip?.phase !== "onboarding" && trip?.phase !== "planning") {
         await e.sendTo(to, copy.badCode());
         return;
       }
@@ -54,7 +64,18 @@ export async function handleOutsider(e: Engine, msg: Inbound, command: ChatComma
     }
     const member = await e.repo.joinMember(target.memberId, msg.chatId);
     await e.repo.recordTripEvent(target.trip.id, "member_joined", { memberId: member.id });
-    await e.sendTo(e.recipient(member), copy.joined(target.trip));
+    const host = (await e.repo.listMembers(target.trip.id)).find((m) => m.role === "host");
+    const name = await knownName;
+    if (!name || target.trip.phase !== "planning") {
+      await e.sendTo(e.recipient(member), copy.joined(host?.name ?? null));
+      return;
+    }
+    // Named by Photon: straight into "Where to?" (with the host's start once known).
+    await e.repo.updateMember(member.id, { name });
+    await syncHostStart(e, target.trip.id);
+    const question = nextQuestion(await e.repo.getPredefined(member.id), false) ?? copy.askWish();
+    await e.sendTo(e.recipient(member), copy.joinedNamed(name, host?.name ?? null, question));
+    await e.broadcast(target.trip.id, copy.someoneJoined(name), member.id);
     return;
   }
 
@@ -75,6 +96,14 @@ export async function captureName(e: Engine, ctx: Ctx): Promise<void> {
   }
   await e.repo.updateMember(ctx.member.id, { name });
   const member = { ...ctx.member, name };
+  if (ctx.trip.phase === "planning") {
+    // Straight into the first question; the others hear that someone joined.
+    await syncHostStart(e, ctx.trip.id);
+    const question = nextQuestion(await e.repo.getPredefined(member.id), member.role === "host") ?? copy.askWish();
+    await e.reply(ctx, copy.hello(name, question));
+    if (member.role !== "host") await e.broadcast(ctx.trip.id, copy.someoneJoined(name), member.id);
+    return;
+  }
   if (ctx.trip.phase !== "onboarding") {
     await e.reply(ctx, `Thanks, ${name}!`);
     return;
@@ -86,7 +115,7 @@ export async function captureName(e: Engine, ctx: Ctx): Promise<void> {
   await e.reply(ctx, copy.memberNext(name));
   const all = await e.repo.listMembers(ctx.trip.id);
   const joined = all.filter((m) => m.status === "joined").length;
-  await e.broadcast(ctx.trip.id, copy.someoneJoined(name, joined, all.length), member.id);
+  await e.broadcast(ctx.trip.id, `${copy.someoneJoined(name)} (${joined}/${all.length} in)`, member.id);
 }
 
 export async function handle(e: Engine, ctx: Ctx): Promise<void> {
@@ -100,7 +129,7 @@ export async function handle(e: Engine, ctx: Ctx): Promise<void> {
   await e.reply(ctx, copy.onboardingHint(ctx.member.role === "host"));
 }
 
-async function invite(e: Engine, ctx: Ctx, handles: string[]): Promise<void> {
+export async function invite(e: Engine, ctx: Ctx, handles: string[]): Promise<void> {
   if (ctx.member.role !== "host") return void (await e.reply(ctx, copy.hostOnly()));
   const sent: string[] = [];
   const failed: string[] = [];
@@ -132,7 +161,7 @@ async function checkStart(e: Engine, ctx: Ctx): Promise<void> {
     ...members.filter((m) => m.status === "invited").map((m) => copy.waitingOnInvite(m.handle)),
     ...joined.filter((m) => !m.onboardingReady && m.id !== ctx.member.id).map((m) => e.displayName(m)),
   ];
-  if (joined.length < e.config.minMembers) waiting.push(copy.needMoreMembers(e.config.minMembers));
+  if (joined.length < e.config.minMembers) waiting.push(copy.needMoreMembers());
   if (waiting.length) {
     await e.reply(ctx, copy.waitingToStart(waiting));
     const ready = joined.filter((m) => m.onboardingReady || m.id === ctx.member.id).length;

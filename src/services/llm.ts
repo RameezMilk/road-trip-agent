@@ -10,8 +10,25 @@ export const LlmTask = z.enum([
   "feedback_assessment",
   "live_update",
   "replacement_stop",
+  "place_canonicalization",
 ]);
 export type LlmTask = z.infer<typeof LlmTask>;
+
+/** How hard the model may think. Lower = faster; extraction and mapping don't need deliberation. */
+export type LlmEffort = "minimal" | "low" | "medium" | "high";
+
+/** Defaults per task, tuned for chat latency (a live demo can't wait ~85 s for a draft). */
+export const DEFAULT_EFFORT: Record<LlmTask, LlmEffort> = {
+  predefined_extraction: "minimal",
+  optional_extraction: "minimal",
+  vote_mapping: "minimal",
+  place_canonicalization: "minimal",
+  conflict_analysis: "low",
+  itinerary_draft: "low",
+  feedback_assessment: "low",
+  live_update: "low",
+  replacement_stop: "low",
+};
 
 export interface LlmRequest<T> {
   task: LlmTask;
@@ -20,6 +37,8 @@ export interface LlmRequest<T> {
   schema: z.ZodType<T>;
   /** Ground the answer with Google Search (place lookups). */
   webSearch?: boolean;
+  /** Overrides DEFAULT_EFFORT[task]. */
+  effort?: LlmEffort;
 }
 
 /** Structured generation: the result has already passed `schema` (LLM output is untrusted). */

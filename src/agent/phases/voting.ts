@@ -1,3 +1,4 @@
+import type { Recipient } from "../../chat/port";
 import {
   type CompleteRequirements,
   isComplete,
@@ -20,13 +21,68 @@ import { copy } from "../copy";
 import type { Ctx, Engine } from "../engine";
 import { applyItineraryDecision, startDrafting } from "./review";
 
-/** planning → voting: settle what everyone agrees on, then poll only where answers differ. */
+/**
+ * planning → voting: settle what everyone agrees on, then poll only where answers differ. While people
+ * vote, Gemini already researches every possible outcome (Engine.speculate).
+ */
 export async function begin(e: Engine, tripId: string): Promise<void> {
   if (!(await e.repo.transition(tripId, "planning", "voting"))) return;
   const rec = reconcilePredefined(await completeRequirements(e, tripId));
+  const fit = await wishesFit(e, tripId);
+  const wishes = fit
+    ? dedupeAdopted((await e.repo.listOptional(tripId)).map((w) => ({ category: w.category, text: w.text })))
+    : [];
   const polls = await e.repo.createPolls(predefinedPolls(tripId, rec));
-  await e.broadcast(tripId, copy.settled(rec, polls.length));
+  await e.broadcast(
+    tripId,
+    copy.settled(
+      rec,
+      polls.length,
+      wishes.map((w) => w.text),
+    ),
+  );
+
+  const trip = await e.repo.getTrip(tripId);
+  if (trip && polls.length && fit) {
+    const routes = rec.route.kind === "agreed" ? [rec.route.value] : rec.route.options;
+    const dates = rec.dates.kind === "agreed" ? [rec.dates.value] : rec.dates.options;
+    const candidates = routes.flatMap((route) =>
+      dates.map((d) => ({
+        ...route,
+        ...d,
+        budgetPerPersonUsd: rec.budgetPerPersonUsd,
+        dietaryRestrictions: rec.dietaryRestrictions,
+        adopted: wishes,
+        decisions: [],
+      })),
+    );
+    e.speculate(trip, candidates, (await e.joinedMembers(tripId)).length);
+  }
   await advance(e, tripId);
+}
+
+/**
+ * Do all the group's wishes fit together? 0–1 wishes always do; otherwise OpenAI Decisions answers in one
+ * fast call. false (or no Decider) means Gemini ConflictAnalysis decides, which can create polls.
+ */
+async function wishesFit(e: Engine, tripId: string): Promise<boolean> {
+  const wishes = await e.repo.listOptional(tripId);
+  if (wishes.length <= 1) return true;
+  const key = `${tripId}:${wishes
+    .map((w) => w.id)
+    .sort()
+    .join(",")}`;
+  const cached = e.wishChecks.get(key);
+  if (cached !== undefined) return cached;
+  const probability = await e.decider.predicate({
+    name: "wishes_compatible",
+    instructions:
+      "These are a road-trip group's wishes. Can ALL of them be satisfied together on one trip, with no wish competing with another for the same time, money or stop?",
+    evidence: wishes.map((w, i) => `${i + 1}. ${w.text}`).join("\n"),
+  });
+  if (probability === null) return false;
+  e.wishChecks.set(key, probability >= 0.5);
+  return probability >= 0.5;
 }
 
 async function completeRequirements(e: Engine, tripId: string): Promise<CompleteRequirements[]> {
@@ -103,6 +159,14 @@ async function resolvePredefined(e: Engine, tripId: string, polls: Poll[]): Prom
 async function analyseOptional(e: Engine, tripId: string, resolved: ResolvedRequirements): Promise<boolean> {
   const reqs = await e.repo.listOptional(tripId);
   if (reqs.length === 0) return false;
+  if (await wishesFit(e, tripId)) {
+    // Already announced with the settled requirements.
+    const adopted = reqs.map((r) => ({ category: r.category, text: r.text }));
+    await e.repo.updateTrip(tripId, {
+      resolved: { ...resolved, adopted: dedupeAdopted([...resolved.adopted, ...adopted]) },
+    });
+    return false;
+  }
   const ids = reqs.map((r) => r.id) as [string, ...string[]];
   let adoptedIds = new Set(ids);
   let pollsSpec: Array<{
@@ -163,20 +227,24 @@ function dedupeAdopted(items: ResolvedRequirements["adopted"]): ResolvedRequirem
 
 export async function sendPoll(e: Engine, poll: Poll, revote: boolean): Promise<void> {
   const text = copy.pollText(poll, revote);
-  for (const m of await e.joinedMembers(poll.tripId)) {
-    await e.sendTo(e.recipient(m), text);
-    const url = e.pollUrl(await e.repo.pollToken(poll.id, m.id));
-    if (!url) continue;
-    try {
-      await e.chat.sendCard(e.recipient(m), url, {
-        caption: `🗳️ ${poll.question}`,
-        subcaption: "Tap to vote",
-        art: { title: "🗳️ Group vote", subtitle: "Tap to vote" },
-      });
-    } catch (error) {
-      e.log("poll_card_failed", { pollId: poll.id, error: String(error) });
-    }
-  }
+  const members = await e.joinedMembers(poll.tripId);
+  await Promise.all(
+    members.map(async (m) => {
+      await e.sendTo(e.recipient(m), text);
+      if (!e.config.pollWidget) return; // votes are iMessage replies; the widget stays available
+      const url = e.pollUrl(await e.repo.pollToken(poll.id, m.id));
+      if (!url) return;
+      try {
+        await e.chat.sendCard(e.recipient(m), url, {
+          caption: `🗳️ ${poll.question}`,
+          subcaption: "Tap to vote",
+          art: { title: "🗳️ Group vote", subtitle: "Tap to vote" },
+        });
+      } catch (error) {
+        e.log("poll_card_failed", { pollId: poll.id, error: String(error) });
+      }
+    }),
+  );
 }
 
 async function openPoll(e: Engine, tripId: string): Promise<Poll | null> {
@@ -200,14 +268,28 @@ export async function castFromText(e: Engine, ctx: Ctx, poll: Poll): Promise<voi
     optionId = poll.options[Number(numeric[1]) - 1]?.id ?? null;
   } else {
     via = "other_text";
-    optionId = await mapToOption(e, poll, text);
+    optionId = await mapToOption(e, poll, text, e.recipient(ctx.member));
   }
   if (!optionId) return void (await e.reply(ctx, copy.voteUnclear(poll.options.length)));
   await recordVote(e, poll, ctx.member.id, optionId, via, text);
 }
 
-async function mapToOption(e: Engine, poll: Poll, text: string): Promise<string | null> {
+const NO_OPTION = "none";
+
+/** Free-text vote → option: OpenAI Decisions first (fast), Gemini if it's unavailable or unsure. */
+async function mapToOption(e: Engine, poll: Poll, text: string, voter?: Recipient): Promise<string | null> {
+  const decided = await e.decider.choose({
+    name: "vote_mapping",
+    instructions: `A traveler replied to the poll "${poll.question}". Which option does their reply choose?`,
+    evidence: `Reply: ${text}`,
+    choices: [
+      ...poll.options.map((o, i) => ({ value: o.id, description: `${i + 1}. ${o.label}` })),
+      { value: NO_OPTION, description: "The reply doesn't choose any of these options" },
+    ],
+  });
+  if (decided && decided.confidence >= 0.5) return decided.value === NO_OPTION ? null : decided.value;
   const ids = poll.options.map((o) => o.id) as [string, ...string[]];
+  if (voter) e.typing(voter);
   try {
     const out = await e.llm.generate({
       task: "vote_mapping",

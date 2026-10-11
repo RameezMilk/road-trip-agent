@@ -25,10 +25,16 @@ Bundle related conflicts into one high-level choice; create at most 3 polls. Eac
 - resolution: the requirement text the planner will follow if it wins.
 If nothing conflicts, return polls: [].`,
 
+  placeCanonicalization: `Normalize the start and end of a US road trip exactly as a traveler typed them.
+Return each as "City, ST" (two-letter state code), or "Place name, City, ST" for a specific spot. Fix misspellings.
+If a place is ambiguous, pick the most likely one given the other end (it's a drivable road trip).`,
+
   voteMapping: `Map a voter's free-text reply to the closest poll option id.
 Return null if the reply does not express a preference among the options.`,
 
-  itineraryDraft: `You are the planning engine of a group road-trip agent. Use Google Search to find real places that are currently open.
+  itineraryDraft: (
+    maxStops: number,
+  ) => `You are the planning engine of a group road-trip agent. Use Google Search to find real places that are currently open.
 Return JSON matching the schema. Rules:
 - Follow the group's requirements exactly: route, dates, trip type, budget per person and EVERY dietary restriction (every restaurant must work for all of them).
 - Honour the adopted wishes and decisions.
@@ -37,12 +43,13 @@ Return JSON matching the schema. Rules:
 - Include exactly one stop of kind "destination" for the end location when the group arrives there. For round trips that is the turnaround point; code adds the drive home.
 - Multi-day trips: end every day except the last with a "lodging" stop.
 - Include meal stops at sensible times, a "gas" stop roughly every 250 miles, and "rest_stop"s on long stretches.
-- At most 12 stops in total.
+- At most ${maxStops} stops in total; fewer is fine for short trips.
 - addressQuery: a street address, or "Place name, City, ST", that OpenStreetMap can find. city: "City, ST".
 - dwellMinutes: time spent at the stop.
 - sustainable: true for low-carbon activities (parks, hikes, walking tours, farm-to-table, local markets, EV charging).
 - estCostPerPersonUsd: rough per-person cost from your research, or null. sourceUrl: the page you used, or null.
-- Never state distances or drive times; code computes them from real routing.`,
+- Never state distances or drive times; code computes them from real routing.
+- Be quick: use at most 3 Google searches in total, then answer.`,
 
   feedbackAssessment: `A member of a road-trip group sent feedback on the proposed itinerary. Classify its impact:
 - "minor": a small tweak that keeps everyone's preferences and does not materially change schedule, budget or driving time (e.g. swap a restaurant for a similar one, 15 more minutes somewhere).

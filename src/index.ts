@@ -3,6 +3,7 @@ import { serve } from "@hono/node-server";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import { Engine } from "./agent/engine";
 import { runChatLoop } from "./agent/runtime";
+import { PhotonUsers } from "./chat/photon-users";
 import type { CardLayout, ChatPort, Recipient } from "./chat/port";
 import { SpectrumChat } from "./chat/spectrum";
 import { loadConfig, requireConfig } from "./config";
@@ -10,8 +11,9 @@ import { createDb, MIGRATIONS_DIR } from "./db/client";
 import { Repo } from "./db/repo";
 import { createHttpApp } from "./http/app";
 import type { CardRef } from "./schemas";
+import { OpenAiDecider } from "./services/decisions";
 import { GeminiLlm } from "./services/gemini";
-import { NominatimGeocoder, OsrmRouter } from "./services/geo";
+import { FallbackGeocoder, NominatimGeocoder, OsrmRouter, PhotonGeocoder } from "./services/geo";
 import { type Llm, LlmError, type LlmRequest } from "./services/llm";
 import { Planner } from "./services/planner";
 
@@ -35,16 +37,34 @@ const unconfiguredLlm: Llm = {
 const llm = config.GEMINI_API_KEY ? new GeminiLlm(config.GEMINI_API_KEY, config.GEMINI_MODEL, log) : unconfiguredLlm;
 if (!config.GEMINI_API_KEY) log("gemini_not_configured");
 
+const decider = config.OPENAI_API_KEY
+  ? new OpenAiDecider(config.OPENAI_API_KEY, config.OPENAI_DECISIONS_MODEL, log)
+  : undefined;
+if (!decider) log("decisions_not_configured", { note: "OPENAI_API_KEY unset — Gemini handles every decision" });
+
 const planner = new Planner({
   llm,
-  geocoder: new NominatimGeocoder(config.NOMINATIM_URL, config.GEO_USER_AGENT, fetch, 1100, log),
+  geocoder: new FallbackGeocoder(
+    new PhotonGeocoder(config.PHOTON_URL, config.GEO_USER_AGENT, fetch, log),
+    new NominatimGeocoder(config.NOMINATIM_URL, config.GEO_USER_AGENT, fetch, 1100, log),
+  ),
   router: new OsrmRouter(config.OSRM_URL, config.GEO_USER_AGENT, fetch, log),
   vehicleMpg: config.VEHICLE_MPG,
   gasPriceUsdPerGallon: config.GAS_PRICE_USD_PER_GALLON,
+  maxStops: config.MAX_STOPS,
 });
 
 let spectrum: SpectrumChat | null = null;
+let names: PhotonUsers | null = null;
 if (config.SPECTRUM_PROJECT_ID && config.SPECTRUM_PROJECT_SECRET) {
+  names = new PhotonUsers(
+    config.SPECTRUM_CLOUD_URL,
+    config.SPECTRUM_PROJECT_ID,
+    config.SPECTRUM_PROJECT_SECRET,
+    fetch,
+    log,
+  );
+  void names.load(); // warm, so the first `new trip` doesn't wait for it
   spectrum = await SpectrumChat.connect({
     projectId: config.SPECTRUM_PROJECT_ID,
     projectSecret: config.SPECTRUM_PROJECT_SECRET,
@@ -73,12 +93,17 @@ const engine = new Engine({
   chat: spectrum ?? offlineChat,
   llm,
   planner,
+  ...(decider ? { decider } : {}),
+  ...(names ? { names } : {}),
   config: {
     publicBaseUrl: config.PUBLIC_BASE_URL ?? null,
     minMembers: config.MIN_MEMBERS,
     timeZone: config.TRIP_TIMEZONE,
     vehicleMpg: config.VEHICLE_MPG,
     gasPriceUsdPerGallon: config.GAS_PRICE_USD_PER_GALLON,
+    reviewStep: config.REVIEW_STEP,
+    pollWidget: config.POLL_WIDGET,
+    dapGifPath: config.DAP_GIF_PATH,
   },
   log,
 });

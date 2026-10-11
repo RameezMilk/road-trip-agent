@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { NominatimGeocoder, OsrmRouter, splitAtWaypoints } from "./geo";
+import {
+  FallbackGeocoder,
+  NominatimGeocoder,
+  OsrmRouter,
+  PhotonGeocoder,
+  photonHitMatches,
+  splitAtWaypoints,
+} from "./geo";
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -106,5 +113,86 @@ describe("OsrmRouter", () => {
         [0, 2],
       ],
     ]);
+  });
+});
+
+describe("photonHitMatches", () => {
+  it("accepts hits whose name and city match the query", () => {
+    expect(
+      photonHitMatches("Downtown Inn and Suites, Asheville, NC", {
+        name: "Downtown Inn and Suites",
+        city: "Asheville",
+        countrycode: "US",
+      }),
+    ).toBe("match");
+    expect(
+      photonHitMatches("Chapel Hill, NC", { name: "Chapel Hill", state: "North Carolina", countrycode: "US" }),
+    ).toBe("match");
+    expect(
+      photonHitMatches("78 Patton Ave, Asheville, NC", {
+        street: "Patton Avenue",
+        city: "Asheville",
+        countrycode: "US",
+      }),
+    ).toBe("match");
+    expect(
+      photonHitMatches("2229 Lake James State Park Rd, Nebo, NC", {
+        name: "Lake James State Park",
+        street: "NC Hwy 126",
+        city: "Nebo",
+        countrycode: "US",
+      }),
+    ).toBe("match");
+  });
+
+  it("asks for a distance check when only the name matches (the hit has a county, not a city)", () => {
+    expect(
+      photonHitMatches("Blue Ridge Parkway Visitor Center, Asheville, NC", {
+        name: "Blue Ridge Parkway Visitor Center",
+        county: "Buncombe",
+        countrycode: "US",
+      }),
+    ).toBe("check_distance");
+  });
+
+  it("rejects a different place, another house on the street, or another country", () => {
+    expect(photonHitMatches("Sheetz, Morganton, NC", { name: "Morganton", countrycode: "US" })).toBe("no");
+    expect(
+      photonHitMatches("1208 W Wendover Ave, Greensboro, NC", {
+        name: "W4, Greensboro Campus Center",
+        housenumber: "3505",
+        street: "East Wendover Avenue",
+        city: "Greensboro",
+        countrycode: "US",
+      }),
+    ).toBe("no");
+    expect(photonHitMatches("Paris, TX", { name: "Paris", countrycode: "FR" })).toBe("no");
+  });
+
+  it("only accepts a same-name place in another city if it's near the stated city", async () => {
+    const at = (lat: number, lng: number, props: Record<string, string>) => ({
+      features: [{ geometry: { coordinates: [lng, lat] }, properties: { countrycode: "US", ...props } }],
+    });
+    const answers: Record<string, unknown> = {
+      "Kapadokia Grill, Asheville, NC": at(36.07, -79.83, { name: "Kapadokia Grill", county: "Guilford" }),
+      "Blue Ridge Parkway Visitor Center, Asheville, NC": at(35.566, -82.486, {
+        name: "Blue Ridge Parkway Visitor Center",
+        county: "Buncombe",
+      }),
+      "Asheville, NC": at(35.595, -82.551, { name: "Asheville" }),
+    };
+    const fetchFn = (async (url: URL) =>
+      new Response(JSON.stringify(answers[url.searchParams.get("q") ?? ""] ?? { features: [] }))) as typeof fetch;
+    const photon = new PhotonGeocoder("https://photon.test", "ua", fetchFn);
+    expect(await photon.geocode("Kapadokia Grill, Asheville, NC")).toBeNull(); // ~250 km away
+    expect(await photon.geocode("Blue Ridge Parkway Visitor Center, Asheville, NC")).not.toBeNull(); // ~6 km
+  });
+});
+
+describe("FallbackGeocoder", () => {
+  it("uses the next geocoder when the first misses", async () => {
+    const hit = { latLng: { lat: 35, lng: -80 }, displayName: "x" };
+    const g = new FallbackGeocoder({ geocode: async () => null }, { geocode: async () => hit });
+    expect(await g.geocode("anything")).toBe(hit);
   });
 });

@@ -38,13 +38,13 @@ const signed = (n: number, unit: string) => `${n > 0 ? "+" : ""}${n}${unit}`;
 
 export function formatDiff(diff: ItineraryDiff): string {
   const lines: string[] = [];
-  if (diff.added.length) lines.push(`➕ Added: ${diff.added.join(", ")}`);
-  if (diff.removed.length) lines.push(`➖ Removed: ${diff.removed.join(", ")}`);
-  if (diff.retimed) lines.push(`🕒 ${diff.retimed} stop${diff.retimed === 1 ? "" : "s"} retimed`);
+  if (diff.added.length) lines.push(`• ➕ Added: ${diff.added.join(", ")}`);
+  if (diff.removed.length) lines.push(`• ➖ Removed: ${diff.removed.join(", ")}`);
+  if (diff.retimed) lines.push(`• 🕒 ${diff.retimed} stop${diff.retimed === 1 ? "" : "s"} retimed`);
   const deltas: string[] = [];
   if (diff.driveMinutesDelta) deltas.push(`driving ${signed(diff.driveMinutesDelta, " min")}`);
   if (diff.milesDelta) deltas.push(`distance ${signed(diff.milesDelta, " mi")}`);
   if (diff.costPerPersonDeltaUsd) deltas.push(`cost ${signed(diff.costPerPersonDeltaUsd, " $/person")}`);
-  if (deltas.length) lines.push(`📊 ${deltas.join(", ")}`);
+  if (deltas.length) lines.push(`• 📊 ${deltas.join(", ")}`);
   return lines.length ? lines.join("\n") : "No changes to stops or timing.";
 }

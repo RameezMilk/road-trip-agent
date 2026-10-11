@@ -5,7 +5,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { app, type Message, type Space, Spectrum } from "spectrum-ts";
+import { app, attachment, type Message, type Space, Spectrum } from "spectrum-ts";
 import { imessage } from "spectrum-ts/providers/imessage";
 import type { Repo } from "../db/repo";
 import type { CardRef, ChatEvent } from "../schemas";
@@ -158,6 +158,16 @@ export class SpectrumChat implements ChatPort {
     await this.recordOutbound(to, sent, "app", null, { url, ...layout });
     const session = (sent as { miniAppCardSession?: Record<string, unknown> } | undefined)?.miniAppCardSession;
     return sent && session ? { messageId: sent.id, session: { ...session } } : null;
+  }
+
+  async sendAttachment(to: Recipient, path: string, mimeType: string): Promise<void> {
+    const name = path.split("/").at(-1) ?? "attachment";
+    const sent = await this.send(to, attachment(path, { mimeType, name }));
+    await this.recordOutbound(to, sent, "attachment", null, { name, mimeType });
+  }
+
+  async typing(to: Recipient): Promise<void> {
+    await (await this.spaceFor(to)).startTyping();
   }
 
   /**

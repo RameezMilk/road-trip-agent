@@ -3,6 +3,8 @@
 // The Map tab (and a short inline live card) locks the page; the other tabs scroll the document itself,
 // vertically only, so iMessage's sheet lets the page scroll before it drags to dismiss. Refreshes every 20 s.
 (() => {
+  // Skips ngrok's free-tier browser warning on API calls (harmless behind any other tunnel).
+  const SKIP_WARNING = { "ngrok-skip-browser-warning": "1" };
   const ICONS = {
     origin: "🏠",
     destination: "🏁",
@@ -428,7 +430,10 @@
 
   async function load() {
     try {
-      const res = await fetch(`/api/trips/${encodeURIComponent(publicId)}`, { cache: "no-store" });
+      const res = await fetch(`/api/trips/${encodeURIComponent(publicId)}`, {
+        cache: "no-store",
+        headers: SKIP_WARNING,
+      });
       if (res.status === 404) {
         $("title").textContent = "Trip not found";
         $("pane-schedule").innerHTML = trippyNote(

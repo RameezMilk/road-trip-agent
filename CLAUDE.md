@@ -11,9 +11,9 @@ An iMessage road-trip agent for HackNC 2026 (Devpost due 10:00 AM ET, Oct 11 202
 - When everyone approves, it sends a Photon mini-app dashboard with a map, a schedule and sustainability bars.
 - On the road, it re-plans live from messages like "we're 30 min late" or "sushi instead of pizza".
 
-`dev/mvp` was started fresh from `main`. The earlier `dev/initial-scratch` branch (the Photon capability probe and spec-era scaffold) is **reference only** and is never merged. Its probe findings are summarized under "Rules" below.
+`dev/mvp` was started fresh from `main`. **`dev/demo`** branches off `dev/mvp` and tunes the flow for a 90-second live judge demo (Rameez + a judge, two phones), so it is fast, short and bulleted. The README has the script and a pre-flight checklist. The earlier `dev/initial-scratch` branch (the Photon capability probe and spec-era scaffold) is **reference only** and is never merged. Its probe findings are summarized under "Rules" below.
 
-**Status:** MVP built and tested offline (fakes plus PGlite). Live use needs `GEMINI_API_KEY` and a Tiger Data `DATABASE_URL` in `.env`.
+**Status:** MVP live-tested on phones. `dev/demo` is built and tested offline (fakes plus PGlite) and runs live with `npm run demo:up`. Live use needs `GEMINI_API_KEY` and a Tiger Data `DATABASE_URL` in `.env`; `OPENAI_API_KEY` (Decisions API) is optional, and Gemini is the fallback.
 
 ## Commands
 
@@ -21,16 +21,17 @@ An iMessage road-trip agent for HackNC 2026 (Devpost due 10:00 AM ET, Oct 11 202
 npm install
 npm run dev            # agent + HTTP on :8787 (tsx watch). Needs DATABASE_URL; runs migrations on boot
 npm start              # same, without watch
+npm run demo:up        # Cloudflare quick tunnel (ngrok fallback) + agent with PUBLIC_BASE_URL and MAX_STOPS=6 set
 npm run dev:demo       # dashboard + poll widget for a seeded, visibly labeled DEMO DATA trip (in-memory PGlite, no keys)
 npm run db:migrate     # apply drizzle/* to Tiger Data (boot also does this)
 npm run db:generate    # regenerate SQL after editing src/db/schema.ts (offline)
 npm run db:tail -- --limit 50   # latest chat_events rows (handles shown as last 4 digits)
-npm run llm:smoke      # one structured + one Google-Search-grounded Gemini call (checks key + model)
+npm run llm:smoke      # structured, grounded and draft Gemini calls with timings (checks key, model, latency)
 npm run typecheck && npm run lint && npm test
 npx vitest run src/agent/engine.test.ts -t "aborts"   # single test
 ```
 
-Cards need public HTTPS. Run `ngrok http 8787` and put the URL in `PUBLIC_BASE_URL`. Scripts load `.env` via `tsx --env-file-if-exists=.env`.
+Cards need public HTTPS. `npm run demo:up` starts a tunnel and passes its URL as `PUBLIC_BASE_URL`; by hand, run `ngrok http 8787` and put the URL in `.env`. Scripts load `.env` via `tsx --env-file-if-exists=.env`.
 
 ## Architecture
 
@@ -51,19 +52,24 @@ Never move it to serverless or edge, because the stream must stay connected.
   - `KeyedQueue` serializes work per trip. `runtime.ts` additionally serializes per sender.
   - Phase changes are compare-and-set (`repo.transition(from, to)`).
   - Drafting runs **outside** the queue (`Engine.startDraftJob`), then commits back through it. On boot, `resumeDrafting()` restarts trips stuck in `drafting`.
+  - **Speculative research:** when polls open, `Engine.speculate` starts `planner.research` for every possible outcome (at most 4). The first draft uses the one whose `draftKey` matches the final requirements; `decisions` are excluded from the key.
   - Every user-facing string is in `copy.ts`.
 - **`src/domain/`** holds pure, unit-tested logic:
+  - `answers` and `dates` are the deterministic readers for the planning questions: route, budget plus diet, "nope", and date ranges with fuzzy month names.
   - `reconcile` compares requirements and builds polls.
   - `tally` picks the winner and handles revotes and tiebreaks.
   - `schedule` computes times, `shiftSchedule` and `rescheduleFrom`.
   - `sustainability`, `diff`, and `time` (time-zone math with no library).
 - **`src/services/`**:
-  - `Llm` port, implemented by `GeminiLlm`. It uses the Interactions API with `store:false` and a JSON `response_format`, plus the Google Search tool when `webSearch`. Results are Zod-validated with one repair retry, and the grounded-text-then-structured fallback is used if the combination fails.
-  - `NominatimGeocoder`: 1 req/s, identifying User-Agent, cached.
+  - `Llm` port, implemented by `GeminiLlm`. It uses the Interactions API with `store:false` and a JSON `response_format`, plus the Google Search tool when `webSearch`. Each task runs at a thinking level (`DEFAULT_EFFORT`). Results are Zod-validated with one repair retry, and the grounded-text-then-structured fallback is used if the combination fails.
+  - `Decider` port (`decisions.ts`), implemented by `OpenAiDecider` (OpenAI Decisions API, `POST /v1/decisions`, `gpt-6-luna`). It only *chooses* among given options or returns a probability, and never extracts text. `null` (no key, refusal, error, 2.5 s timeout) sends the caller to its Gemini path.
+  - Geocoding is `FallbackGeocoder(PhotonGeocoder, NominatimGeocoder)`:
+    - Komoot Photon runs in parallel, and a hit counts only if its name and city match the query;
+    - Nominatim follows at 1 req/s with an identifying User-Agent. Both are cached.
   - `OsrmRouter`: one multi-waypoint call, with a haversine fallback labeled `estimate`.
-  - `Planner`: Gemini picks places, OSM locates them, and code computes every number.
+  - `Planner`: `research` (Gemini picks places), then `place` (OSM locates them in parallel, and code computes every number). `draft` runs both.
 - **`src/chat/`**:
-  - `ChatPort` is the provider-neutral boundary.
+  - `ChatPort` is the provider-neutral boundary. `NameDirectory` (`PhotonUsers`) supplies first names from the Photon project's users list (Spectrum REST API, Basic `projectId:projectSecret`).
   - `spectrum.ts` is the **only** importer of `spectrum-ts`. It maps the stream, sends text and cards, edits cards in place, and records every outbound message to `chat_events`.
   - `commands.ts` parses text into `ChatCommand`.
 - **`src/db/`**:
@@ -84,28 +90,29 @@ Never move it to serverless or edge, because the stream must stay connected.
 
 ### Conversation flow (each member in their own DM)
 
-1. **Onboarding:**
-   - `newtrip`, then the host's name.
-   - `invite +1…` DMs each invitee, or friends use `join CODE`.
-   - `join`, then the member's name.
-   - Everyone sends `ready`. Planning needs at least `MIN_MEMBERS` joined and no pending invites.
-2. **Planning:** each member answers the 7 predefined fields one by one.
-   - Simple answers are parsed deterministically first, and Gemini `PredefinedExtraction` handles the rest.
-   - Optional wishes come next, through `OptionalExtraction`. Then `ready`.
-   - **Photos** (`phases/photo.ts`): Gemini `ImageInterpretation` (image input plus Google Search) reads a screenshot of a post about a place and records the wish "Visit X, City". It reads a photo of a view and records "Include stops similar to: …". The wish text is built in code. A caption arrives as a separate message in either order; recent DM context plus `awaitingPhoto` keep it from being counted twice. In **review**, a photo becomes feedback ("Add a stop at …" / "Add stops similar to: …") for `FeedbackAssessment`. In other phases photos are declined. Image bytes are fetched from Photon only when used (`runtime.ts`, 7 MB cap) and are never stored.
-3. **Voting:**
-   - Reconcile first: budget becomes the minimum and dietary restrictions are unioned.
-   - Then route and dates polls run, only where members differ, one open poll at a time.
-   - A vote is a number, or free text mapped by Gemini `VoteMapping`, or the widget.
-   - A tie gets a revote. A predefined poll still tied after the revote **aborts** the trip.
-   - Gemini `ConflictAnalysis` then adopts compatible wishes and creates at most 3 bundled polls for real conflicts.
-4. **Drafting:** Gemini with Google Search produces `ItineraryDraft`, then geocode, then OSRM, then the deterministic schedule.
-5. **Review:** `approve`, or feedback that Gemini `FeedbackAssessment` classifies:
-   - **minor**: auto-replan, approvals carry over;
-   - **material**: new version, everyone re-approves;
-   - **conflicting**: an itinerary poll with a "keep current plan" option.
+1. **Start and join:**
+   - `newtrip` creates the trip directly in `planning`. The host gets three bubbles: the intro, `join CODE` on its own so it can be forwarded, and "Hey Rameez! 📍 Where from, and where to?".
+   - Friends send `join CODE`, or `join` after an `invite +1…`, and go straight to "📍 Where to?". The host hears "👋 Sam joined!".
+   - First names come from the Photon project's users (`PhotonUsers`, `GET /projects/{id}/users/`, cached). Only someone with no first name on file is asked "What's your first name?".
+2. **Planning:** 3 grouped questions cover the 7 must-haves:
+   - 📍 route: **the host** gives start and destination ("Chapel Hill to Wilmington"; a lone place is their start, then "And where to?"). **Guests** only name a destination, and their start is the host's (`syncHostStart`). Every trip is a **round trip** and it's never asked; "one way" is ignored and never read as a place;
+   - 📅 dates: one message, e.g. "Oct 18–19";
+   - 💵🥗 budget plus diet: "$300, halal".
 
-   Each version is announced with a deterministic diff. When everyone approves, the trip moves to execution and each member gets the dashboard card.
+   Each answer is read **deterministically first** (`domain/answers`, `domain/dates`); Gemini `PredefinedExtraction` only gets what those can't read. A typed route is cleaned to "City, ST" in the background (`PlaceCanonicalization`). Then "✨ Anything else?": one message, either "nope" or a wish (sorted by Decisions, Gemini fallback), finishes the member. A `ready` message isn't needed.
+   - **Photos** (`phases/photo.ts`): Gemini `ImageInterpretation` (image input plus Google Search) reads a screenshot of a post about a place and records the wish "Visit X, City". It reads a photo of a view and records "Include stops similar to: …". The wish text is built in code. A caption arrives as a separate message in either order; recent DM context plus `awaitingPhoto` keep it from being counted twice. In **review**, a photo becomes feedback ("Add a stop at …" / "Add stops similar to: …") for `FeedbackAssessment`. In other phases photos are declined. Image bytes are fetched from Photon only when used (`runtime.ts`, 7 MB cap) and are never stored.
+3. **Voting** starts when ≥ `MIN_MEMBERS` have joined, no invite is pending, and everyone has finished:
+   - Reconcile first: budget becomes the minimum, dietary restrictions are unioned, and "Wilmington" equals "Wilmington, NC".
+   - Wishes: 0–1 always fit; otherwise a Decisions predicate checks them, with Gemini `ConflictAnalysis` as the fallback.
+   - Route and dates polls run only where members differ, one open poll at a time. A vote is a number or free text (Decisions first, then Gemini `VoteMapping`).
+   - A tie gets a revote. A predefined poll still tied after the revote **aborts** the trip.
+4. **Drafting:** the research is usually already done speculatively. Then geocoding (Photon, then Nominatim), OSRM, and the deterministic schedule.
+5. **Launch** (`REVIEW_STEP=false`, the default): each member, in parallel, gets "✅ Itinerary ready!", the dashboard card, a send-off ("🏖️ You're set for Wilmington!" plus a line chosen by Decisions from the destination's vibe) and `DAP_GIF_PATH`.
+   - With `REVIEW_STEP=true`, the card is followed by "reply approve". Feedback is classified by Gemini `FeedbackAssessment`:
+     - **minor**: auto-replan, approvals carry over;
+     - **material**: new version, everyone re-approves;
+     - **conflicting**: an itinerary poll.
+   - Revisions text a bulleted diff and edit the card. Full approval sends the send-off and GIF. **The itinerary is never sent as text.**
 6. **Execution:** Gemini `LiveUpdate` classifies the message:
    - `delay` runs `shiftSchedule` for the same day;
    - `replace_stop` runs `Planner.replaceStop`;
@@ -129,7 +136,7 @@ Never move it to serverless or edge, because the stream must stay connected.
   - Pass `layout` to `app()` so Photon doesn't fetch OG metadata through ngrok.
   - Cards carry Trippy artwork (`web/trippy-card.jpg`) via the layout's `image` + `imageTitle`. Photon only accepts JPEG there. If a card with art fails and the same card without it succeeds, `SpectrumChat` turns the art off for the rest of the process (`card_art_disabled` in the log).
   - **Cards are sent non-live by default (`CARD_LIVE=false`).** A live card (`app(url,{live:true})`) renders the page *inline* in the thread at about reply-bubble size, and the first live test showed it was far too cramped. A non-live card is a normal bubble that should open the mini-app in iMessage's expanded, near-full-screen view when tapped.
-  - Free ngrok domains show a "You are about to visit…" page to browsers first. Tap **Visit Site** once.
+  - Free ngrok domains show a "You are about to visit…" page to browsers first. The `ngrok-skip-browser-warning` header only helps requests we make, i.e. the dashboard's `fetch` calls, which send it. iMessage loads the card page itself, so that first load can't carry the header. `demo:up` therefore prefers a Cloudflare quick tunnel, which has no such page. Where trycloudflare.com is blocked (it timed out on the hackathon network), it falls back to ngrok, and each phone taps **Visit Site** once (remembered for 7 days).
   - The mini-app webview ignores `target="_blank"` and doesn't open new windows. External links (Google Maps) use the `data-external` handler in `dashboard.js`, which navigates in place when no window opens. Don't add new-window links.
 - **Identity and privacy:**
   - Card pages carry no identity. The dashboard is read-only and keyed by an unguessable `publicId`, and `TripDashboard` exposes first names and aggregates only: no handles, no per-person requirements, no who-voted-what.
@@ -143,12 +150,20 @@ Never move it to serverless or edge, because the stream must stay connected.
   - The only fixtures are in `src/testing/` (tests) and `npm run dev:demo`, whose trip is titled "DEMO DATA".
 - **OSM usage policies:**
   - Nominatim allows at most 1 request per second, needs an identifying `GEO_USER_AGENT`, and results are cached.
+  - Komoot Photon (`photon.komoot.io`) is fair use: one request per stop per draft, cached, with the same User-Agent. It happily returns a same-name place in another city, so `photonHitMatches` checks name and city.
   - OSRM's public demo server is for light use.
   - Tiles need OSM attribution, which is already shown.
 - **Gemini:**
   - Gemini returns HTTP 400 for `minItems`/`maxItems` on nested arrays, so `toLlmJsonSchema` strips them and Zod enforces them after parsing.
   - Structured output combined with the Google Search tool is a **Gemini 3** feature. Keep `GEMINI_MODEL` on a Gemini 3 model (default `gemini-3.8-flash`).
   - Use the Interactions API (`client.interactions.create`, read `output_text`).
+  - **Thinking level is the latency knob.** With the default thinking level, the grounded draft took 74–86 s; at `thinking_level: "low"` it takes about 11 s (`npm run llm:smoke`).
+    - `gemini-3.8-flash` rejects `"minimal"`, so `GeminiLlm` remembers rejected levels and steps up to the next one.
+    - Small structured calls still take 2.5–5 s, so chat replies avoid Gemini whenever a deterministic reader works.
+- **OpenAI Decisions API** (public beta since 2026-10-06, `openai` ≥ 7.30, `client.decisions.create`):
+  - It supports `choice`, `predicate` and `score` questions only. Use it to pick among known options, never to extract values.
+  - Answers can be `refusal`. A refusal, a value it wasn't offered or low confidence means "ask Gemini".
+  - `.env` may still contain `ENABLE_DECISIONS_API=false` from the old scratch branch. Nothing reads it: `OPENAI_API_KEY` alone turns Decisions on.
 - **Out of scope:** bookings, payments, background GPS, calendars, social scraping, Snowflake (per the pitch), voice and images.
 
 ## Deviations from the owner's pitch / data flow / user flow
@@ -166,10 +181,24 @@ Never move it to serverless or edge, because the stream must stay connected.
 | 9 | (unspecified) | Trip times are in `TRIP_TIMEZONE` (default `America/New_York`) | We don't collect a time zone, and the demo corridor is in North Carolina. |
 | 10 | Changes are auto, proposed or voted depending on impact | During **execution** (on the road), changes apply immediately and everyone is notified. The three tiers apply during itinerary review. | Last-minute changes on the road can't wait for re-approval. |
 | 11 | Gas savings and carbon footprint | Computed in code from OSRM distance and `VEHICLE_MPG`/`GAS_PRICE_USD_PER_GALLON`, at 8.887 kg CO₂ per gallon (EPA). Carpooling savings are measured against each member driving solo. The dashboard labels all of these as assumptions. | Gemini never supplies distances, times, fuel or CO₂. |
-| 12 | (unspecified) | Each member's first name is captured when they join | Polls, status messages and the dashboard show first names, never phone numbers. |
+| 12 | (unspecified) | Each member's first name is taken from their Photon user record (`firstName`), and asked only if Photon has none | Polls, status messages and the dashboard show first names, never phone numbers. |
 | 13 | (unspecified) | Text, plus **photos during planning and review**: a screenshot of a place becomes a "visit" wish, and a photo of a view becomes a "stops similar to" wish or feedback. Voice notes and other attachments get a "text only for now" reply. | People share places as screenshots and pictures, which Gemini can read directly. Voice notes would need to be transcoded first (iMessage records them as CAF). |
 | 14 | (unspecified) | Planning starts once at least `MIN_MEMBERS` (default 2) people have joined | Stops a host's early `ready` from launching a solo trip. Set it to 1 for solo testing. |
 | 15 | Dashboard only after everyone approves | The card is sent to everyone on full approval, as specified, but `dashboard` also works during review as a preview | Lets the group see the map while they decide, without changing the approval flow. |
 | 16 | Requirements gathered by the "Planning Phase" | Mid-planning corrections ("actually change my budget to 300") are re-extracted and re-validated | People change their minds, and the predefined schema stays authoritative. |
-| 18 | Dashboard layout: map, schedule widget and sustainability icons | A tabbed dashboard (Map / Schedule / Impact / Trip), opened from a **non-live** Photon card, which opens near-full-screen in iMessage (confirmed on device) | The live test showed an inline live card is reply-bubble sized: components were cramped, the schedule scrolled sideways, and the sustainability bars were out of reach. |
 | 17 | Gemini drafts the itinerary with web search | At most 12 stops. Stops Nominatim can't find fall back to "name, city", then to the town centre (marked "approx." on the map), then are dropped and listed. | OSM geocoding of businesses is imperfect. Showing what was approximated or dropped is better than inventing coordinates. |
+| 18 | Dashboard layout: map, schedule widget and sustainability icons | A tabbed dashboard (Map / Schedule / Impact / Trip), opened from a **non-live** Photon card, which opens near-full-screen in iMessage (confirmed on device) | The live test showed an inline live card is reply-bubble sized: components were cramped, the schedule scrolled sideways, and the sustainability bars were out of reach. |
+| 19 | Ask the predefined requirements one by one | 3 grouped questions (route · dates · budget + diet). Answers are read deterministically first; dates take abbreviations and misspellings ("Octobr 18 to 19"); Gemini reads the rest. | A 90-second demo can't afford 7 turns per person, or Gemini's 2.5–5 s per answer. |
+| 20 | Everyone sends `ready` before planning | `newtrip` starts in `planning`; people answer as soon as they've joined; voting waits for ≥ `MIN_MEMBERS`, no pending invites and everyone finished | Removes two turns per person and the dead time while the host waits. Late joiners now work until voting starts. |
+| 21 | Optional wishes: as many messages as you like, then `ready` | One "Anything else?" answer: "nope" or a wish. Either finishes the member. | One turn instead of two or more. Later messages are still added as wishes until the vote. |
+| 22 | Round trip or one way is asked | **Round trips only**, never asked; "one way" is ignored | Owner decision: plan round trips only. Saves a turn and a field. One-way support stays in the planner and schemas. |
+| 23 | (unspecified) | Typed places are cleaned to "City, ST" by Gemini **in the background**; reconcile treats "X" and "X, ST" as one place | Deterministic parsing keeps raw text, and a spurious "Wilmington vs Wilmington, NC" vote would kill the demo. |
+| 24 | Use OpenAI's Decisions API to cut latency where it fits | `OpenAiDecider` for free-text votes, sorting the "anything else?" wish, the wish-compatibility check, and the send-off vibe. Gemini is the fallback for every one. | Decisions only *chooses*, so it replaces exactly the Gemini calls that were choices (`VoteMapping`, `OptionalExtraction` on this path, most `ConflictAnalysis` runs). |
+| 25 | (unspecified) | Gemini research runs **speculatively** for every possible poll outcome while people vote; per-task thinking levels; `MAX_STOPS` (6 in the demo); Photon parallel geocoding | Drafts took ~85 s. Now about 11 s of research overlaps the vote, and placing takes about 1–2 s. |
+| 26 | Dashboard after everyone approves | `REVIEW_STEP=false` (demo default): the first itinerary goes straight to the road. `REVIEW_STEP=true` restores approve, feedback and polls. | The owner chose to skip the approve turn for the demo. The review tiers stay intact behind the flag. |
+| 27 | (itinerary shown in chat) | **No itinerary text:** "✅ Itinerary ready!", then the card. Revisions and live changes text only a bulleted diff. | The owner asked for a short message plus the mini-app. The card is the itinerary. |
+| 28 | (unspecified) | A send-off ("🏔️ You're set for Asheville! … pack a jacket 🧥") plus the dap GIF on every phone at launch | The demo's ending, requested by the owner. The line comes from a deterministic table keyed by the destination's vibe. |
+| 29 | Poll widget for voting | `POLL_WIDGET=false`: votes are iMessage replies only. The widget page and API remain. | Owner request: vote by texting. The feature is disabled, not deleted. |
+| 30 | Dashboard hosted on ngrok | `demo:up` uses a Cloudflare quick tunnel and falls back to ngrok | Cloudflare quick tunnels show no browser warning page. The ngrok header can't be attached to iMessage's own page load. |
+| 31 | Everyone gives a start and an end; differing routes are voted on | **The host sets the start** for everyone. Guests are asked only "Where to?", and the route poll lists destinations only | Owner decision. The group leaves from one place, and the vote is simpler. |
+| 32 | Ask each person's name | Names come from the Photon users list, so nobody is asked unless Photon has no first name for them | Owner decision: Photon already stores registered users' names. One cached list call; on failure the agent just asks. |
