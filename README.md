@@ -1,15 +1,49 @@
-# road-trip-agent
+<p align="center">
+  <img src="web/trippy.png" alt="Trippy, a smiling red cartoon car" width="132">
+</p>
 
-An iMessage agent (Photon Spectrum) that plays the "group leader" for a friends' road trip:
-- it collects everyone's requirements in their own DMs;
-- it puts only real disagreements to a vote;
-- it drafts the itinerary with Gemini and live web search;
-- it hands each traveler a Frutiger Aero trip dashboard (OpenStreetMap) as an iMessage mini-app;
-- it re-plans live from texts like "we're running 30 min late".
+<h1 align="center">Trippy</h1>
 
-The `dev/demo` branch tunes all of this for a 90-second live demo (see **Demo** below).
+<p align="center">
+  <b>The AI group leader for road trips, right inside iMessage.</b><br>
+  Everyone answers in their own DM. Trippy votes only where you disagree, plans the trip around real people,<br>
+  and hands everyone a live trip dashboard without leaving the conversation.
+</p>
 
-See `CLAUDE.md` for the architecture, rules, and every deviation from the original pitch.
+<p align="center">
+  <img alt="Photon Spectrum (iMessage)" src="https://img.shields.io/badge/iMessage-Photon%20Spectrum-34C759?style=flat-square&logo=imessage&logoColor=white">
+  <img alt="Gemini 3.8 Flash with Google Search" src="https://img.shields.io/badge/Gemini-3.8%20Flash%20%2B%20Search-8E75B2?style=flat-square&logo=googlegemini&logoColor=white">
+  <img alt="OpenAI Decisions API" src="https://img.shields.io/badge/OpenAI-Decisions%20API-412991?style=flat-square&logo=openai&logoColor=white">
+  <img alt="Tiger Data (TimescaleDB)" src="https://img.shields.io/badge/Tiger%20Data-TimescaleDB-F5A623?style=flat-square&logo=timescale&logoColor=white">
+  <img alt="OpenStreetMap and OSRM" src="https://img.shields.io/badge/OpenStreetMap-OSRM%20%C2%B7%20Leaflet-7EBC6F?style=flat-square&logo=openstreetmap&logoColor=white">
+</p>
+
+<p align="center">
+  <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-6-3178C6?style=flat-square&logo=typescript&logoColor=white">
+  <img alt="Node.js 24" src="https://img.shields.io/badge/Node.js-24-5FA04E?style=flat-square&logo=nodedotjs&logoColor=white">
+  <img alt="Hono" src="https://img.shields.io/badge/Hono-HTTP-E36002?style=flat-square&logo=hono&logoColor=white">
+  <img alt="Zod" src="https://img.shields.io/badge/Zod-schemas-3E67B1?style=flat-square&logo=zod&logoColor=white">
+  <img alt="Drizzle ORM" src="https://img.shields.io/badge/Drizzle-ORM-222222?style=flat-square&logo=drizzle&logoColor=C5F74F">
+  <img alt="Built with Claude Code" src="https://img.shields.io/badge/built%20with-Claude%20Code-D97757?style=flat-square&logo=claude&logoColor=white">
+</p>
+
+<p align="center">
+  <img alt="121 tests passing" src="https://img.shields.io/badge/tests-121%20passing-2EA44F?style=flat-square&logo=vitest&logoColor=white">
+  <img alt="Runs offline with PGlite" src="https://img.shields.io/badge/tests-offline%20%C2%B7%20PGlite-555555?style=flat-square">
+  <img alt="HackNC 2026" src="https://img.shields.io/badge/HackNC-2026-0A66C2?style=flat-square">
+</p>
+
+## Highlights
+
+- 💬 **Lives in iMessage:** each traveler texts Trippy in their own DM; first names come from Photon, and friends join with a forwarded code.
+- 🗳️ **Votes only on disagreements:** reply with a number or in words; the OpenAI Decisions API maps free-text votes to options in ~200 ms.
+- 🧭 **Plans while you vote:** the moment a poll opens, Gemini with Google Search starts drafting a complete itinerary for every possible outcome.
+- 🧍 **Plans for people, not just places:** mealtimes, a stretch break every ~2 hours and at most ~8 hours of driving a day, all checked against real OSRM drive times.
+- 📸 **Multimodal:** a photo becomes a wish while planning and a new stop on the road.
+- 🗺️ **Live mini-app dashboard:** map, schedule, sustainability (fuel, CO₂, carpool savings) and group decisions, edited in place as plans change.
+- ⏰ **Built on Tiger Data:** every message streams into TimescaleDB hypertables, which also drive the reminders.
+
+See `CLAUDE.md` for the architecture, rules, and every deviation from the original pitch. The `dev/demo` branch tunes the flow for a 90-second live demo (see **Demo** below).
 
 ## Run it
 
@@ -36,7 +70,7 @@ See `CLAUDE.md` for the architecture, rules, and every deviation from the origin
    ```
 5. From iMessage:
    1. The host texts `new trip`, then forwards the `join CODE` bubble to friends.
-   2. Each person sends `join CODE` to the agent and gives a first name.
+   2. Each person sends `join CODE` to the agent (first names come from Photon).
    3. Everyone answers three questions and "anything else?".
    4. Everyone votes where answers differ.
    5. "✅ Itinerary ready!" arrives with the dashboard card, a send-off and a GIF.
