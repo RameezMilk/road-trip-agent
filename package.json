@@ -15,6 +15,7 @@
     "db:check": "tsx --env-file-if-exists=.env src/scripts/db-check.ts",
     "db:tail": "tsx --env-file-if-exists=.env src/scripts/db-tail.ts",
     "db:watch": "tsx --env-file-if-exists=.env src/scripts/db-watch.ts",
+    "trip:peek": "tsx --env-file-if-exists=.env src/scripts/trip-peek.ts",
     "llm:smoke": "tsx --env-file-if-exists=.env src/scripts/llm-smoke.ts",
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",
