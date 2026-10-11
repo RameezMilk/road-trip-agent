@@ -73,15 +73,26 @@
       history.replaceState(null, "", `#${name}`);
     } catch {}
     if (name === "map" && current?.itinerary) {
+      // Synchronous on purpose: the pane is visible now, so Leaflet can measure it, and callers like
+      // focusStop can use the markers immediately.
       ensureMap();
-      // the map container was display:none until now
-      requestAnimationFrame(() => {
-        map?.invalidateSize();
-        renderMap(current.itinerary);
-      });
+      map?.invalidateSize();
+      renderMap(current.itinerary);
     }
   }
   for (const t of TABS) $(`tab-${t}`).addEventListener("click", () => showTab(t));
+
+  // The Photon mini-app webview ignores target="_blank" (no new windows), so external links fall back to
+  // navigating in place when no window opens.
+  document.addEventListener("click", (event) => {
+    const link = event.target instanceof Element ? event.target.closest("a[data-external]") : null;
+    if (!link) return;
+    event.preventDefault();
+    // No "noopener" feature string: with it, window.open returns null even when the tab opens.
+    const opened = window.open(link.href, "_blank");
+    if (opened) opened.opener = null;
+    else location.href = link.href;
+  });
 
   // --- formatting -----------------------------------------------------------------------------------
   const fmtTime = (iso, tz) =>
@@ -151,7 +162,7 @@
       ${s.address ? `<p>${esc(s.address)}</p>` : ""}
       ${s.note ? `<p>${esc(s.note)}</p>` : ""}
       ${s.webEstimateCostPerPersonUsd != null ? `<p>≈ ${money(s.webEstimateCostPerPersonUsd)}/person <span class="tag">Gemini web estimate</span></p>` : ""}
-      <a class="gmaps" href="${gmaps(s)}" target="_blank" rel="noopener">Open in Google Maps</a>
+      <a class="gmaps" href="${gmaps(s)}" target="_blank" rel="noopener" data-external>Open in Google Maps</a>
     </div>`;
   }
 
@@ -204,12 +215,18 @@
   /** Schedule tap → switch to the map, fly to the stop, open its popup. */
   function focusStop(id) {
     showTab("map");
-    setTimeout(() => {
-      const marker = markers.get(id);
-      if (!marker || !map) return;
-      map.flyTo(marker.getLatLng(), Math.max(map.getZoom(), 13), { duration: 0.6 });
-      setTimeout(() => marker.openPopup(), 650);
-    }, 60);
+    const marker = markers.get(id);
+    if (!marker || !map) return;
+    // Open the popup when the fly animation ends, or after a beat if animation frames are throttled.
+    let opened = false;
+    const open = () => {
+      if (opened) return;
+      opened = true;
+      marker.openPopup();
+    };
+    map.once("moveend", open);
+    setTimeout(open, 900);
+    map.flyTo(marker.getLatLng(), Math.max(map.getZoom(), 13), { duration: 0.6 });
   }
 
   // --- panes ------------------------------------------------------------------------------------------
@@ -299,8 +316,7 @@
         .map((k) => `<span><span class="orb" style="--pin: var(--k-${k})">${ICONS[k]}</span>${LABELS[k]}</span>`)
         .join("")}</div>
       <p class="foot">${it?.droppedStops.length ? `Couldn't locate: ${esc(it.droppedStops.join(", "))}.<br>` : ""}
-        Map data © OpenStreetMap contributors · routing by OSRM${it ? ` · itinerary v${it.version}` : ""}</p>
-      <a class="btn-link" href="${esc(location.href.split("#")[0])}" target="_blank" rel="noopener">Open full screen ↗</a>`;
+        Map data © OpenStreetMap contributors · routing by OSRM${it ? ` · itinerary v${it.version}` : ""}</p>`;
   }
 
   function render(d) {

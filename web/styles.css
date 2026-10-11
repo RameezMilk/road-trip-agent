@@ -560,17 +560,6 @@ body {
   text-align: center;
 }
 
-.btn-link {
-  display: inline-block;
-  margin-top: 8px;
-  padding: 10px 14px;
-  border-radius: 999px;
-  color: #fff;
-  font-weight: 700;
-  text-decoration: none;
-  background: linear-gradient(180deg, #6fd5ff 0%, var(--aqua) 50%, var(--aqua-deep) 100%);
-}
-
 /* --- in-thread bubble (very short live card): one-line summary only -------------------------------- */
 .bubble-only {
   display: none;
