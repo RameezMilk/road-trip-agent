@@ -116,7 +116,7 @@ Never move it to serverless or edge, because the stream must stay connected.
 6. **Execution:** Gemini `LiveUpdate` classifies the message:
    - `delay` runs `shiftSchedule` for the same day;
    - `replace_stop` runs `Planner.replaceStop`;
-   - `add_stop` runs `Planner.addStop`: Gemini (with Google Search) finds the real place, OSM locates it, and it goes between the stops still ahead where it adds the least driving (straight-line cheapest insertion, then OSRM re-times everything after it). Nothing is dropped; more than 3 h of extra driving is declined;
+   - `add_stop` runs `Planner.addStop`: Gemini (with Google Search) finds the real place, OSM locates it, and it goes between the stops still ahead where it adds the least driving (straight-line cheapest insertion, then OSRM re-times everything after it). Nothing is dropped, however far off the route it is;
    - `replan_remaining` re-drafts the rest.
    - **A photo** ("saw this on Instagram, let's go here") goes through `ImageInterpretation` (caption included), then the place itself, or a real place like the view, is added with `Planner.addStop` (`execution.photoStop`).
 

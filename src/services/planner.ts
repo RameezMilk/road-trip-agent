@@ -17,9 +17,6 @@ import type { Geocoder, Router } from "./geo";
 import type { Llm } from "./llm";
 import { itineraryBlock, requirementsBlock, SYSTEM } from "./prompts";
 
-/** An added stop that costs more driving than this is declined rather than squeezed in. */
-const MAX_ADDED_DETOUR_MINUTES = 180;
-
 export class PlanningError extends Error {
   constructor(message: string) {
     super(message);
@@ -256,16 +253,6 @@ export class Planner {
     };
     const stops = [...itinerary.stops.slice(0, at), stop, ...itinerary.stops.slice(at)];
     const legs = await this.deps.router.route(stops);
-    const extraMinutes = Math.round(
-      (legs.reduce((sum, l) => sum + l.durationSeconds, 0) -
-        itinerary.legs.reduce((sum, l) => sum + l.durationSeconds, 0)) /
-        60,
-    );
-    if (extraMinutes > MAX_ADDED_DETOUR_MINUTES) {
-      throw new PlanningError(
-        `${located.name} is about ${Math.round(extraMinutes / 60)} hr of extra driving from your route.`,
-      );
-    }
     const timed = rescheduleFrom(stops, legs, at, itinerary.timeZone);
     return {
       itinerary: finalizeItinerary({
