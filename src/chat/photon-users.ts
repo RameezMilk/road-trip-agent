@@ -76,15 +76,17 @@ export class PhotonUsers implements NameDirectory {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const { data } = UsersResponse.parse(await res.json());
       const names = new Map<string, string>();
+      let named = 0;
       for (const user of data.users) {
         const name = cleanFirstName(user.firstName);
         if (!name) continue;
+        named++;
         names.set(handleKey(user.phoneNumber), name);
         if (user.email) names.set(handleKey(user.email), name);
       }
       this.names = names;
       this.loadedAt = Date.now();
-      this.log("photon_users_loaded", { users: data.users.length, named: names.size, ms: Date.now() - started });
+      this.log("photon_users_loaded", { users: data.users.length, named, ms: Date.now() - started });
     } catch (error) {
       this.loadedAt = Date.now(); // don't hammer the API; the agent asks for names meanwhile
       this.log("photon_users_failed", { error: String(error) });
