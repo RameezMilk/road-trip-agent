@@ -41,6 +41,7 @@ const planner = new Planner({
   router: new OsrmRouter(config.OSRM_URL, config.GEO_USER_AGENT, fetch, log),
   vehicleMpg: config.VEHICLE_MPG,
   gasPriceUsdPerGallon: config.GAS_PRICE_USD_PER_GALLON,
+  maxStops: config.MAX_STOPS,
 });
 
 let spectrum: SpectrumChat | null = null;

@@ -28,7 +28,9 @@ If nothing conflicts, return polls: [].`,
   voteMapping: `Map a voter's free-text reply to the closest poll option id.
 Return null if the reply does not express a preference among the options.`,
 
-  itineraryDraft: `You are the planning engine of a group road-trip agent. Use Google Search to find real places that are currently open.
+  itineraryDraft: (
+    maxStops: number,
+  ) => `You are the planning engine of a group road-trip agent. Use Google Search to find real places that are currently open.
 Return JSON matching the schema. Rules:
 - Follow the group's requirements exactly: route, dates, trip type, budget per person and EVERY dietary restriction (every restaurant must work for all of them).
 - Honour the adopted wishes and decisions.
@@ -37,7 +39,7 @@ Return JSON matching the schema. Rules:
 - Include exactly one stop of kind "destination" for the end location when the group arrives there. For round trips that is the turnaround point; code adds the drive home.
 - Multi-day trips: end every day except the last with a "lodging" stop.
 - Include meal stops at sensible times, a "gas" stop roughly every 250 miles, and "rest_stop"s on long stretches.
-- At most 12 stops in total.
+- At most ${maxStops} stops in total; fewer is fine for short trips.
 - addressQuery: a street address, or "Place name, City, ST", that OpenStreetMap can find. city: "City, ST".
 - dwellMinutes: time spent at the stop.
 - sustainable: true for low-carbon activities (parks, hikes, walking tours, farm-to-table, local markets, EV charging).

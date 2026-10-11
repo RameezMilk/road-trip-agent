@@ -21,6 +21,10 @@ export interface ChatPort {
   sendCard(to: Recipient, url: string, layout: CardLayout): Promise<CardRef | null>;
   /** Edits a previously sent live card in place; returns the (possibly new) edit handle. */
   editCard(to: Recipient, card: CardRef, url: string, layout: CardLayout): Promise<CardRef | null>;
+  /** Sends a file (the send-off GIF). */
+  sendAttachment?(to: Recipient, path: string, mimeType: string): Promise<void>;
+  /** Shows the typing indicator until the next message (best effort). */
+  typing?(to: Recipient): Promise<void>;
 }
 
 /** Raised when Photon refuses a recipient (not registered in the Photon dashboard on the Pro plan). */

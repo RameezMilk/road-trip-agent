@@ -54,6 +54,7 @@ export interface SentMessage {
   to: string;
   text: string | null;
   card: { url: string; layout: CardLayout; edited: boolean } | null;
+  attachment?: { path: string; mimeType: string };
 }
 
 export class FakeChat implements ChatPort {
@@ -74,6 +75,31 @@ export class FakeChat implements ChatPort {
   async editCard(to: Recipient, card: CardRef, url: string, layout: CardLayout): Promise<CardRef | null> {
     this.sent.push({ to: to.handle, text: null, card: { url, layout, edited: true } });
     return card;
+  }
+
+  readonly typingTo: string[] = [];
+
+  async sendAttachment(to: Recipient, path: string, mimeType: string): Promise<void> {
+    this.sent.push({ to: to.handle, text: null, card: null, attachment: { path, mimeType } });
+  }
+
+  async typing(to: Recipient): Promise<void> {
+    this.typingTo.push(to.handle);
+  }
+
+  /** Everything sent to a handle, as short labels: the text, "[card]", "[card edit]" or "[file name]". */
+  timeline(handle: string): string[] {
+    return this.sent
+      .filter((m) => m.to === handle)
+      .map((m) =>
+        m.text !== null
+          ? m.text
+          : m.card
+            ? m.card.edited
+              ? "[card edit]"
+              : "[card]"
+            : `[file ${m.attachment?.path.split("/").at(-1)}]`,
+      );
   }
 
   /** Texts sent to a handle since the last `take`. */

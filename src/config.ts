@@ -33,6 +33,23 @@ const envSchema = z.object({
     z.enum(["true", "false"]).transform((v) => v === "true"),
     "false",
   ),
+  /** Max planned stops per itinerary. Fewer = faster drafts (the demo uses 6). */
+  MAX_STOPS: withDefault(z.coerce.number().int().min(3).max(15), 12),
+  /** `false`: the first itinerary goes straight to the road (no approve round). `true`: everyone approves first. */
+  REVIEW_STEP: withDefault(
+    z.enum(["true", "false"]).transform((v) => v === "true"),
+    "false",
+  ),
+  /** Also send each voter a poll-widget card. Off: votes are iMessage replies only (the widget code stays). */
+  POLL_WIDGET: withDefault(
+    z.enum(["true", "false"]).transform((v) => v === "true"),
+    "false",
+  ),
+  /** GIF sent with the send-off when the itinerary is ready (skipped if the file is missing). */
+  DAP_GIF_PATH: withDefault(z.string().min(1), "assets/dap.gif"),
+  /** OpenAI Decisions API (fast constrained choices). Without a key every decision falls back to Gemini. */
+  OPENAI_API_KEY: optionalString,
+  OPENAI_DECISIONS_MODEL: withDefault(z.string().min(1), "gpt-6-luna"),
   NOMINATIM_URL: withDefault(z.url(), "https://nominatim.openstreetmap.org"),
   OSRM_URL: withDefault(z.url(), "https://router.project-osrm.org"),
   /** Nominatim's usage policy requires an identifying User-Agent. */

@@ -1,6 +1,6 @@
 import { GoogleGenAI } from "@google/genai";
 import { toLlmJsonSchema } from "../schemas";
-import { type Llm, LlmError, type LlmRequest } from "./llm";
+import { DEFAULT_EFFORT, type Llm, type LlmEffort, LlmError, type LlmRequest } from "./llm";
 
 type Log = (event: string, data?: Record<string, unknown>) => void;
 
@@ -8,9 +8,13 @@ type Log = (event: string, data?: Record<string, unknown>) => void;
  * Gemini via the Interactions API (the docs' recommended surface). Structured output plus Google Search
  * grounding in one call is a Gemini 3 feature; if the model rejects that combination we fall back to a
  * grounded text call followed by a structured call. Output is parsed with Zod; one repair retry.
+ * Each task runs at a thinking level (DEFAULT_EFFORT): default (high) thinking made drafts take ~85 s.
  */
 export class GeminiLlm implements Llm {
   private readonly client: GoogleGenAI;
+  /** Turned off for the process if the model rejects `thinking_level` outright. */
+  private thinkingLevels = true;
+  private readonly unsupported = new Set<LlmEffort>();
 
   constructor(
     apiKey: string,
@@ -45,7 +49,7 @@ export class GeminiLlm implements Llm {
   }
 
   private async structured<T>(request: LlmRequest<T>, prompt: string, webSearch: boolean): Promise<string> {
-    const interaction = await this.client.interactions.create({
+    const interaction = await this.create(request, {
       model: this.model,
       system_instruction: request.system,
       input: prompt,
@@ -59,7 +63,7 @@ export class GeminiLlm implements Llm {
   }
 
   private async grounded<T>(request: LlmRequest<T>): Promise<string> {
-    const interaction = await this.client.interactions.create({
+    const interaction = await this.create(request, {
       model: this.model,
       system_instruction: `${request.system}\nResearch with Google Search and answer in concise plain-text notes.`,
       input: request.prompt,
@@ -67,6 +71,31 @@ export class GeminiLlm implements Llm {
       tools: [{ type: "google_search" as const }],
     });
     return (interaction as { output_text?: string }).output_text ?? "";
+  }
+
+  /**
+   * Adds the task's thinking level. A level the model rejects ("THINKING_LEVEL_MINIMAL is not supported")
+   * is remembered and the next one up is used; any other rejection retries once without a level.
+   */
+  private async create<T>(request: LlmRequest<T>, params: InteractionParams): Promise<unknown> {
+    const wanted: LlmEffort = request.effort ?? DEFAULT_EFFORT[request.task];
+    const effort = EFFORT_ORDER.slice(EFFORT_ORDER.indexOf(wanted)).find((e) => !this.unsupported.has(e));
+    if (!this.thinkingLevels || !effort) return this.client.interactions.create(params);
+    try {
+      return await this.client.interactions.create({ ...params, generation_config: { thinking_level: effort } });
+    } catch (error) {
+      if (/thinking level/i.test(String(error))) {
+        this.unsupported.add(effort);
+        this.log("gemini_thinking_level_unsupported", { task: request.task, effort });
+        return this.create(request, params);
+      }
+      const result = await this.client.interactions.create(params).catch(() => {
+        throw error;
+      });
+      this.thinkingLevels = false;
+      this.log("gemini_thinking_level_rejected", { task: request.task, effort, error: String(error) });
+      return result;
+    }
   }
 
   private parse<T>(request: LlmRequest<T>, text: string): { ok: true; value: T } | { ok: false; issues: string } {
@@ -90,6 +119,18 @@ export class GeminiLlm implements Llm {
   private wrap<T>(request: LlmRequest<T>, error: unknown): Error {
     return error instanceof LlmError ? error : new LlmError(request.task, String(error));
   }
+}
+
+const EFFORT_ORDER: LlmEffort[] = ["minimal", "low", "medium", "high"];
+
+/** The subset of `interactions.create` params we use (the SDK type is an overload union). */
+interface InteractionParams {
+  model: string;
+  system_instruction: string;
+  input: string;
+  store: boolean;
+  tools?: Array<{ type: "google_search" }>;
+  response_format?: { type: "text"; mime_type: "application/json"; schema: Record<string, unknown> };
 }
 
 const ENTITIES: Record<string, string> = {

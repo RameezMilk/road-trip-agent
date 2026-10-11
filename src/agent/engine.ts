@@ -171,6 +171,13 @@ export class Engine {
     }
   }
 
+  /** Typing dots before slow work (Gemini, drafting). Awaited so they can't land after the reply; capped at 1.5 s. */
+  async typing(to: Recipient): Promise<void> {
+    if (!this.chat.typing) return;
+    const timeout = new Promise<void>((resolve) => setTimeout(resolve, 1500));
+    await Promise.race([this.chat.typing(to).catch(() => undefined), timeout]);
+  }
+
   async reply(ctx: Ctx, text: string): Promise<void> {
     await this.sendTo(this.recipient(ctx.member), text);
   }

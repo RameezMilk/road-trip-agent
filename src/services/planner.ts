@@ -28,6 +28,8 @@ export interface PlannerDeps {
   router: Router;
   vehicleMpg: number;
   gasPriceUsdPerGallon: number;
+  /** Cap on planned stops (fewer stops = faster draft and fewer geocoding calls at 1 req/s). */
+  maxStops?: number;
 }
 
 export interface DraftInput {
@@ -41,12 +43,16 @@ export interface DraftInput {
   revision?: { previous: Itinerary; instruction: string };
 }
 
-const MAX_STOPS = 12;
+const DEFAULT_MAX_STOPS = 12;
 const HttpUrl = z.url({ protocol: /^https?$/ });
 
 /** Gemini picks places (grounded by Google Search); OSM locates them; OSRM + code compute every number. */
 export class Planner {
-  constructor(private readonly deps: PlannerDeps) {}
+  private readonly maxStops: number;
+
+  constructor(private readonly deps: PlannerDeps) {
+    this.maxStops = deps.maxStops ?? DEFAULT_MAX_STOPS;
+  }
 
   tripDays(resolved: ResolvedRequirements): number {
     return Math.min(14, Math.max(1, daysBetween(resolved.startDate, resolved.endDate) + 1));
@@ -60,7 +66,7 @@ export class Planner {
       : "";
     const draft = await this.deps.llm.generate({
       task: "itinerary_draft",
-      system: SYSTEM.itineraryDraft,
+      system: SYSTEM.itineraryDraft(this.maxStops),
       prompt: `Plan this group road trip.\n${requirementsBlock(resolved, days)}${revision}`,
       schema: ItineraryDraft,
       webSearch: true,
@@ -91,7 +97,7 @@ export class Planner {
       const day = Math.min(days, Math.max(1, plan.day));
       if (!dayDepartTimes.has(day)) dayDepartTimes.set(day, LocalTime.safeParse(plan.departTime).data ?? "09:00");
       for (const stop of plan.stops) {
-        if (count >= MAX_STOPS) break;
+        if (count >= this.maxStops) break;
         const located = await this.locate(stop, day);
         if (located) {
           placed.push(located);
