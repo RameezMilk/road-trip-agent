@@ -89,6 +89,7 @@ beforeEach(async () => {
       router: new FakeRouter(),
       vehicleMpg: 30,
       gasPriceUsdPerGallon: 3.2,
+      humane: false, // exact schedules; the human-schedule pass has its own tests
     }),
     config: {
       publicBaseUrl: "https://trip.example",

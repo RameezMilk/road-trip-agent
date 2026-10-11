@@ -52,6 +52,7 @@ const planner = new Planner({
   vehicleMpg: config.VEHICLE_MPG,
   gasPriceUsdPerGallon: config.GAS_PRICE_USD_PER_GALLON,
   maxStops: config.MAX_STOPS,
+  log,
 });
 
 let spectrum: SpectrumChat | null = null;

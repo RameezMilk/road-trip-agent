@@ -47,9 +47,19 @@ Return JSON matching the schema. Rules:
 - Honour the adopted wishes and decisions.
 - Plan days 1..N where N is the number of trip days given. departTime is the local HH:MM departure for each day's first leg.
 - List stops in driving order. Do NOT include the starting location: code adds it.
-- Include exactly one stop of kind "destination" for the end location when the group arrives there. For round trips that is the turnaround point; code adds the drive home.
+- Include exactly one stop of kind "destination" for the end location when the group arrives there. For round trips that is the turnaround point; code adds the final arrival home.
+- Round trips: on the last day, after the stops at the destination, list the stops on the DRIVE HOME (a lunch or rest stop roughly halfway, if the drive is over ~2 hours); they come before the arrival home.
 - Multi-day trips: end every day except the last with a "lodging" stop.
-- Include meal stops at sensible times, a "gas" stop roughly every 250 miles, and "rest_stop"s on long stretches.
+- Plan for the people in the car (code checks this against the real drive times and sends violations back):
+  - Meals at normal US mealtimes: breakfast 7–10 AM, lunch 11:30 AM–1:30 PM, dinner 5:30–8 PM. One sit-down meal
+    per mealtime, at least ~3.5 hours apart; never two food stops back to back. A quick coffee/ice-cream stop is fine
+    with dwellMinutes ≤ 20. Lunch ~45 min, dinner ~60–75 min. Estimate when you'll reach each stop from the drive.
+  - A stop at least every 2 hours (~100 miles) of driving, 15+ minutes, somewhere to get out and walk (AAA and
+    National Safety Council guidance; sitting for hours raises blood-clot risk, CDC). A meal or attraction counts;
+    otherwise add a "rest_stop" (park, overlook or rest area). The drive home on the last day needs breaks too.
+  - At most ~8 hours of driving a day; depart 7:30–10 AM; reach lodging by ~9 PM; no driving late at night.
+  - A "gas" stop roughly every 250 miles (it can double as a break).
+  - When the stop limit is tight, breaks and meals come before extra attractions.
 - At most ${maxStops} stops in total; fewer is fine for short trips.
 - addressQuery: a street address, or "Place name, City, ST", that OpenStreetMap can find. city: "City, ST".
 - dwellMinutes: time spent at the stop.

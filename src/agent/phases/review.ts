@@ -68,14 +68,14 @@ export async function draftItinerary(e: Engine, tripId: string, revision: Revisi
     memberCount: members.length,
     ...(previous && revision ? { revision: { previous, instruction: revision.instruction } } : {}),
   };
-  // First draft: research for the winning poll outcome usually started while people voted.
+  // First draft: the winning poll outcome was usually drafted while people voted.
   const speculative = !previous && !revision ? e.takeSpeculation(tripId, trip.resolved) : null;
   if (speculative) {
-    const research = await speculative.catch((error) => {
+    const drafted = await speculative.catch((error) => {
       e.log("draft_speculation_failed", { tripId, error: String(error) });
       return null;
     });
-    if (research) return e.planner.place(input, research);
+    if (drafted) return { ...drafted, version: input.version };
   }
   return e.planner.draft(input);
 }

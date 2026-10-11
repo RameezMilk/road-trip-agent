@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { haversineMeters } from "../domain/geo";
+import { alignMeals, breakPoints, scheduleIssues, stretchBreak } from "../domain/humane";
 import { buildItinerary, finalizeItinerary, type PlacedStop, rescheduleFrom } from "../domain/schedule";
-import { daysBetween } from "../domain/time";
+import { daysBetween, formatDuration } from "../domain/time";
 import {
   type DraftStop,
   type Itinerary,
@@ -32,6 +33,12 @@ export interface PlannerDeps {
   gasPriceUsdPerGallon: number;
   /** Cap on planned stops (fewer stops = faster draft and fewer geocoding calls at 1 req/s). */
   maxStops?: number;
+  /**
+   * Plan for people (default on): stretch breaks on long drives, meals moved to mealtimes, and one Gemini
+   * repair round for whatever still breaks a rule (`domain/humane`). Off in tests that pin exact schedules.
+   */
+  humane?: boolean;
+  log?: (event: string, data?: Record<string, unknown>) => void;
 }
 
 export interface DraftInput {
@@ -51,6 +58,8 @@ const HttpUrl = z.url({ protocol: /^https?$/ });
 /** Gemini picks places (grounded by Google Search); OSM locates them; OSRM + code compute every number. */
 export class Planner {
   private readonly maxStops: number;
+  /** One-way drive time per start|end, so Gemini can put meals and breaks at the right hours. */
+  private readonly driveHints = new Map<string, Promise<string>>();
 
   constructor(private readonly deps: PlannerDeps) {
     this.maxStops = deps.maxStops ?? DEFAULT_MAX_STOPS;
@@ -61,23 +70,84 @@ export class Planner {
   }
 
   async draft(input: DraftInput): Promise<Itinerary> {
-    return this.place(input, await this.research(input));
+    return this.placeChecked(input, await this.research(input));
+  }
+
+  /**
+   * Places a researched draft, then checks the real schedule (OSRM times) against human needs: meals at
+   * mealtimes and not back to back, a break at least every ~2 h, about 8 h of driving a day at most, no
+   * night driving (`domain/humane`). Problems get one repair round with Gemini, given the exact issues;
+   * the version with fewer problems wins.
+   */
+  async placeChecked(input: DraftInput, draft: ItineraryDraft): Promise<Itinerary> {
+    const placed = await this.place(input, draft);
+    if (this.deps.humane === false) return placed;
+    const issues = scheduleIssues(placed);
+    if (!issues.length) return placed;
+    const log = this.deps.log ?? (() => {});
+    log("schedule_issues", { tripId: input.tripId, count: issues.length, issues });
+    try {
+      const instruction = [
+        "Fix these schedule problems (found on the real drive times):",
+        ...issues.map((i) => `- ${i}`),
+        "Keep the route, dates and the stops that work; move, swap or add stops only as needed.",
+        'Leave out the stops named "Stretch break …": code adds those on long drives.',
+      ].join("\n");
+      const repaired = await this.place(
+        input,
+        await this.research({ ...input, revision: { previous: placed, instruction } }),
+      );
+      const after = scheduleIssues(repaired);
+      log("schedule_repaired", { tripId: input.tripId, before: issues.length, after: after.length, issues: after });
+      return after.length < issues.length ? repaired : placed;
+    } catch (error) {
+      log("schedule_repair_failed", { tripId: input.tripId, error: String(error) });
+      return placed;
+    }
   }
 
   /** The slow part: Gemini + Google Search picks the places. The engine may run it speculatively. */
-  research(input: DraftInput): Promise<ItineraryDraft> {
+  async research(input: DraftInput): Promise<ItineraryDraft> {
     const { resolved } = input;
     const days = this.tripDays(resolved);
     const revision = input.revision
       ? `\n\nCurrent itinerary:\n${itineraryBlock(input.revision.previous)}\n\nRequested change: ${input.revision.instruction}\nKeep everything else as it is unless the change requires otherwise.`
       : "";
+    const drive = await this.driveHint(resolved);
     return this.deps.llm.generate({
       task: "itinerary_draft",
       system: SYSTEM.itineraryDraft(this.maxStops),
-      prompt: `Plan this group road trip.\n${requirementsBlock(resolved, days)}${revision}`,
+      prompt: `Plan this group road trip.\n${requirementsBlock(resolved, days)}${drive}${revision}`,
       schema: ItineraryDraft,
       webSearch: true,
     });
+  }
+
+  /**
+   * "Driving A → B takes about 3h 25m": the real one-way drive (one OSRM call, cached), so the draft puts
+   * meals and breaks at the right hours instead of guessing. Empty if either end can't be located.
+   */
+  private driveHint(resolved: ResolvedRequirements): Promise<string> {
+    const key = `${resolved.startLocation}|${resolved.endLocation}`;
+    let hint = this.driveHints.get(key);
+    if (!hint) {
+      hint = (async () => {
+        const [a, b] = await Promise.all([
+          this.deps.geocoder.geocode(resolved.startLocation),
+          this.deps.geocoder.geocode(resolved.endLocation),
+        ]);
+        if (!a || !b) return "";
+        const [leg] = await this.deps.router.route([
+          { id: "stop_start", latLng: a.latLng },
+          { id: "stop_end", latLng: b.latLng },
+        ]);
+        return leg
+          ? `\nDriving ${resolved.startLocation} → ${resolved.endLocation} takes about ${formatDuration(leg.durationSeconds)} one way without stops (real routing): plan meals and breaks around it.`
+          : "";
+      })().catch(() => "");
+      this.driveHints.set(key, hint);
+    }
+    return hint;
   }
 
   /** Locates the researched stops (in parallel), routes them, and computes the schedule and totals. */
@@ -139,8 +209,21 @@ export class Planner {
       placed.push({ ...originStop, id: newId("stop"), day: lastDay, name: `Home: ${resolved.startLocation}` });
     }
 
-    const legs = await this.deps.router.route(placed);
-    return buildItinerary({
+    let legs = await this.deps.router.route(placed);
+    if (this.deps.humane !== false) {
+      // Long stretches without a stop (often the drive home) get a stretch break on the real route.
+      const breaks = breakPoints(placed, legs);
+      if (breaks.length) {
+        const towns = await Promise.all(
+          breaks.map((b) => this.deps.geocoder.townAt?.(b.latLng).catch(() => null) ?? Promise.resolve(null)),
+        );
+        const order = breaks.map((b, k) => ({ ...b, town: towns[k] ?? null }));
+        order.sort((a, b) => b.afterIndex - a.afterIndex || b.order - a.order);
+        for (const b of order) placed.splice(b.afterIndex + 1, 0, stretchBreak(newId("stop"), b, b.town));
+        legs = await this.deps.router.route(placed);
+      }
+    }
+    const built = buildItinerary({
       tripId: input.tripId,
       version: input.version,
       title: draft.title.trim().slice(0, 120) || input.title,
@@ -154,6 +237,16 @@ export class Planner {
       gasPriceUsdPerGallon: this.deps.gasPriceUsdPerGallon,
       rationale: draft.rationale.trim().slice(0, 600) || null,
       droppedStops: dropped.slice(0, 20),
+    });
+    if (this.deps.humane === false) return built;
+    // An early meal waits for its mealtime (linger at the previous activity / leave a bit later).
+    return finalizeItinerary({
+      ...built,
+      resolved,
+      stops: alignMeals(built.stops, built.legs, built.timeZone),
+      memberCount: input.memberCount,
+      vehicleMpg: this.deps.vehicleMpg,
+      gasPriceUsdPerGallon: this.deps.gasPriceUsdPerGallon,
     });
   }
 

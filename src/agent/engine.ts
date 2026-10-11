@@ -3,7 +3,7 @@ import { type CardLayout, type ChatPort, type NameDirectory, noNames, type Recip
 import type { Repo } from "../db/repo";
 import { refersToPhoto, wantsToLeave } from "../domain/answers";
 import { draftKey } from "../domain/reconcile";
-import type { ChatCommand, Itinerary, ItineraryDraft, Member, ResolvedRequirements, Trip } from "../schemas";
+import type { ChatCommand, Itinerary, Member, ResolvedRequirements, Trip } from "../schemas";
 import { type Decider, noDecider } from "../services/decisions";
 import type { Llm } from "../services/llm";
 import type { Planner } from "../services/planner";
@@ -91,7 +91,7 @@ export class Engine {
   private readonly background = new Set<Promise<unknown>>();
   private readonly draftJobs = new Set<string>();
   /** Speculative itinerary research per trip, keyed by `draftKey` of each possible poll outcome. */
-  private readonly speculative = new Map<string, Map<string, Promise<ItineraryDraft>>>();
+  private readonly speculative = new Map<string, Map<string, Promise<Itinerary>>>();
   /** "Do all of this trip's wishes fit together?" answers, so speculation and resolution agree. */
   readonly wishChecks = new Map<string, boolean>();
   private reminderTimer: ReturnType<typeof setInterval> | null = null;
@@ -372,16 +372,16 @@ export class Engine {
   }
 
   /**
-   * Starts Gemini research for every possible outcome of the open polls while people vote, so the
-   * winner's places are usually ready when the vote closes. Only the research is speculative: geocoding,
-   * routing and the schedule run for the winner alone.
+   * Drafts every possible outcome of the open polls while people vote (at most 4), so the winner's
+   * itinerary is usually ready when the vote closes: research, placing, stretch breaks, mealtimes and the
+   * human-schedule repair round all happen during the vote instead of after it.
    */
   speculate(trip: Trip, candidates: ResolvedRequirements[], memberCount: number): void {
-    const byKey = new Map<string, Promise<ItineraryDraft>>();
+    const byKey = new Map<string, Promise<Itinerary>>();
     for (const resolved of candidates.slice(0, 4)) {
       const key = draftKey(resolved);
       if (byKey.has(key)) continue;
-      const research = this.planner.research({
+      const research = this.planner.draft({
         tripId: trip.id,
         version: 1,
         title: trip.title,
@@ -396,8 +396,8 @@ export class Engine {
     this.log("draft_speculation_started", { tripId: trip.id, candidates: byKey.size });
   }
 
-  /** The speculative research matching the final requirements, if any; the trip's cache is cleared. */
-  takeSpeculation(tripId: string, resolved: ResolvedRequirements): Promise<ItineraryDraft> | null {
+  /** The speculative draft matching the final requirements, if any; the trip's cache is cleared. */
+  takeSpeculation(tripId: string, resolved: ResolvedRequirements): Promise<Itinerary> | null {
     const research = this.speculative.get(tripId)?.get(draftKey(resolved)) ?? null;
     this.speculative.delete(tripId);
     this.log(research ? "draft_speculation_hit" : "draft_speculation_miss", { tripId });

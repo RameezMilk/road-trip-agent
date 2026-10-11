@@ -9,7 +9,63 @@ export interface GeocodeResult {
 
 export interface Geocoder {
   geocode(query: string): Promise<GeocodeResult | null>;
+  /** "Benson, NC": the town at a point (names a stretch break on the highway). Optional. */
+  townAt?(latLng: LatLng): Promise<string | null>;
 }
+
+const US_STATE_CODES: Record<string, string> = {
+  alabama: "AL",
+  alaska: "AK",
+  arizona: "AZ",
+  arkansas: "AR",
+  california: "CA",
+  colorado: "CO",
+  connecticut: "CT",
+  delaware: "DE",
+  "district of columbia": "DC",
+  florida: "FL",
+  georgia: "GA",
+  hawaii: "HI",
+  idaho: "ID",
+  illinois: "IL",
+  indiana: "IN",
+  iowa: "IA",
+  kansas: "KS",
+  kentucky: "KY",
+  louisiana: "LA",
+  maine: "ME",
+  maryland: "MD",
+  massachusetts: "MA",
+  michigan: "MI",
+  minnesota: "MN",
+  mississippi: "MS",
+  missouri: "MO",
+  montana: "MT",
+  nebraska: "NE",
+  nevada: "NV",
+  "new hampshire": "NH",
+  "new jersey": "NJ",
+  "new mexico": "NM",
+  "new york": "NY",
+  "north carolina": "NC",
+  "north dakota": "ND",
+  ohio: "OH",
+  oklahoma: "OK",
+  oregon: "OR",
+  pennsylvania: "PA",
+  "rhode island": "RI",
+  "south carolina": "SC",
+  "south dakota": "SD",
+  tennessee: "TN",
+  texas: "TX",
+  utah: "UT",
+  vermont: "VT",
+  virginia: "VA",
+  washington: "WA",
+  "west virginia": "WV",
+  wisconsin: "WI",
+  wyoming: "WY",
+};
 
 export interface Router {
   /** One leg per consecutive pair of points. */
@@ -187,6 +243,29 @@ export class PhotonGeocoder implements Geocoder {
     return hit;
   }
 
+  async townAt(latLng: LatLng): Promise<string | null> {
+    const url = new URL("/reverse", this.baseUrl);
+    url.searchParams.set("lat", latLng.lat.toFixed(5));
+    url.searchParams.set("lon", latLng.lng.toFixed(5));
+    url.searchParams.set("lang", "en");
+    url.searchParams.set("limit", "1");
+    try {
+      const res = await this.fetchFn(url, {
+        headers: { "User-Agent": this.userAgent, Accept: "application/json" },
+        signal: AbortSignal.timeout(4000),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const p = PhotonResponse.parse(await res.json()).features[0]?.properties;
+      const town = p?.city ?? p?.district ?? p?.county ?? p?.name;
+      if (!town) return null;
+      const state = p?.state ? (US_STATE_CODES[p.state.toLowerCase()] ?? p.state) : null;
+      return state ? `${town}, ${state}` : town;
+    } catch (error) {
+      this.log("reverse_geocode_failed", { error: String(error) });
+      return null;
+    }
+  }
+
   private async request(query: string): Promise<GeocodeResult | null> {
     const url = new URL("/api/", this.baseUrl);
     url.searchParams.set("q", query);
@@ -236,6 +315,14 @@ export class FallbackGeocoder implements Geocoder {
     for (const g of this.geocoders) {
       const hit = await g.geocode(query);
       if (hit) return hit;
+    }
+    return null;
+  }
+
+  async townAt(latLng: LatLng): Promise<string | null> {
+    for (const g of this.geocoders) {
+      const town = await g.townAt?.(latLng);
+      if (town) return town;
     }
     return null;
   }
