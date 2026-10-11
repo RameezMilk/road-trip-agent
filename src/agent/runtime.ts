@@ -52,7 +52,7 @@ export async function runChatLoop(deps: {
             messageId: ev.messageId,
             handle,
             chatId: ev.chatId,
-            text: "",
+            text: ev.text ?? "", // the caption, when the photo came with one
             receivedAt: ev.occurredAt,
             image: { mimeType: image.mimeType, data },
           });

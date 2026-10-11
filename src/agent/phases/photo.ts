@@ -20,7 +20,9 @@ export async function interpretPhoto(e: Engine, ctx: Ctx, trip: string): Promise
   const interpretation = await e.llm.generate({
     task: "image_interpretation",
     system: SYSTEM.imageInterpretation,
-    prompt: `${conversationBlock(history)}Trip: ${trip}\nThe member just sent the attached image.`,
+    prompt: `${conversationBlock(history)}Trip: ${trip}\nThe member just sent the attached image${
+      ctx.msg.text.trim() ? ` with the caption: """${ctx.msg.text.trim().slice(0, 300)}"""` : "."
+    }`,
     schema: ImageInterpretation,
     webSearch: true,
     images: [{ mimeType: image.mimeType, base64: image.data.toString("base64") }],

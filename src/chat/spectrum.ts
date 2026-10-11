@@ -249,7 +249,9 @@ export async function toInbound(space: Space, message: Message): Promise<Inbound
       memberId: null,
       direction: "inbound",
       handle,
-      kind: message.content.type,
+      // What it was read as (a photo+caption group is an "attachment", a reply to a text is "text"), so
+      // reminders count it as an answer and caption handling can find the photo.
+      kind: described.kind === "other" ? message.content.type : described.kind,
       text: described.text === null ? null : clean(described.text),
       content: described.content,
       metadata: providerMetadata(message),
@@ -288,6 +290,23 @@ async function describeContent(
     case "reply": {
       const inner = await describeContent(c.content as Message["content"]);
       return { ...inner, content: { ...inner.content, replyToId: c.target?.id ?? null } };
+    }
+    case "group": {
+      // One iMessage with several parts — typically a photo plus its caption ("somewhere like this").
+      // Read as the first image with the text parts as its caption; text-only groups read as text.
+      const parts = await Promise.all(c.items.map((item) => describeContent(item.content)));
+      const image = parts.find((p) => p.image)?.image;
+      const text = parts
+        .map((p) => (p.kind === "text" ? p.text : null))
+        .filter(Boolean)
+        .join("\n")
+        .trim();
+      return {
+        kind: image ? "attachment" : text ? "text" : "other",
+        text: text || null,
+        content: { type: "group", items: parts.map((p) => p.content), ...(image ? { mimeType: image.mimeType } : {}) },
+        ...(image ? { image } : {}),
+      };
     }
     default:
       return { kind: "other", text: null, content: { type: c.type } };
