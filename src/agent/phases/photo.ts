@@ -41,6 +41,16 @@ export function wishFor(it: ImageInterpretation): string | null {
   return text ? (RequirementText.safeParse(text.slice(0, 200)).data ?? null) : null;
 }
 
+/** What a photo asks for on the road: the place itself, or a real place like the one shown. */
+export function stopRequestFor(it: ImageInterpretation, caption: string): string | null {
+  const wish = wishFor(it);
+  if (!wish) return null;
+  const said = caption.trim() ? ` (they said: "${caption.trim().slice(0, 200)}")` : "";
+  return it.kind === "place"
+    ? `${wish.replace(/^Visit /, "the place in a member's photo: ")}${said}`
+    : `a real place like a member's photo: ${it.description.trim()}${said}`;
+}
+
 /** The feedback a photo stands for during review. */
 export function feedbackFor(it: ImageInterpretation): string | null {
   const wish = wishFor(it);

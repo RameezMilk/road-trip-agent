@@ -1,10 +1,12 @@
 import { z } from "zod";
+import { haversineMeters } from "../domain/geo";
 import { buildItinerary, finalizeItinerary, type PlacedStop, rescheduleFrom } from "../domain/schedule";
 import { daysBetween } from "../domain/time";
 import {
   type DraftStop,
   type Itinerary,
   ItineraryDraft,
+  type ItineraryStop,
   LocalTime,
   newId,
   ReplacementStop,
@@ -14,6 +16,9 @@ import {
 import type { Geocoder, Router } from "./geo";
 import type { Llm } from "./llm";
 import { itineraryBlock, requirementsBlock, SYSTEM } from "./prompts";
+
+/** An added stop that costs more driving than this is declined rather than squeezed in. */
+const MAX_ADDED_DETOUR_MINUTES = 180;
 
 export class PlanningError extends Error {
   constructor(message: string) {
@@ -200,6 +205,80 @@ export class Planner {
         vehicleMpg: this.deps.vehicleMpg,
         gasPriceUsdPerGallon: this.deps.gasPriceUsdPerGallon,
       }),
+      summary: result.summary.trim().slice(0, 200),
+    };
+  }
+
+  /**
+   * Adds one stop to the rest of a trip that's underway (a place from a photo, or "add a stop at …"):
+   * Gemini finds the real place with Google Search, OSM locates it, and it goes between the two stops still
+   * ahead where it adds the least driving. Times from there on are recomputed; nothing is dropped.
+   */
+  async addStop(input: {
+    itinerary: Itinerary;
+    request: string;
+    /** Index of the stop the group is at now; the new stop goes after it. */
+    after: number;
+    resolved: ResolvedRequirements;
+    memberCount: number;
+    version: number;
+  }): Promise<{ itinerary: Itinerary; stop: ItineraryStop; summary: string }> {
+    const { itinerary } = input;
+    const first = Math.max(1, input.after + 1);
+    if (first >= itinerary.stops.length) throw new PlanningError("there are no stops left on this trip to add it to.");
+    const ahead = itinerary.stops.slice(first - 1).map((s) => `[${s.id}] ${s.name} (day ${s.day})`);
+    const result = await this.deps.llm.generate({
+      task: "added_stop",
+      system: SYSTEM.addedStop,
+      prompt: `${requirementsBlock(input.resolved, this.tripDays(input.resolved))}\n\n${itineraryBlock(itinerary)}\n\nThe group is at or past "${itinerary.stops[first - 1]?.name}". Stops still ahead:\n${ahead.join("\n")}\n\nAdd: ${input.request}`,
+      schema: ReplacementStop,
+      webSearch: true,
+    });
+    const draft = { ...result.stop, kind: result.stop.kind === "destination" ? "attraction" : result.stop.kind };
+    const located = await this.locate(draft as DraftStop, 1);
+    if (!located) throw new PlanningError(`I couldn't find "${result.stop.name}" on the map.`);
+
+    // Cheapest insertion among the legs still ahead (straight-line detour; OSRM then times the real route).
+    let at = first;
+    let best = Number.POSITIVE_INFINITY;
+    for (let i = first; i < itinerary.stops.length; i++) {
+      const a = (itinerary.stops[i - 1] as ItineraryStop).latLng;
+      const b = (itinerary.stops[i] as ItineraryStop).latLng;
+      const extra = haversineMeters(a, located.latLng) + haversineMeters(located.latLng, b) - haversineMeters(a, b);
+      if (extra < best) [best, at] = [extra, i];
+    }
+    const before = itinerary.stops[at - 1] as ItineraryStop;
+    const stop: ItineraryStop = {
+      ...located,
+      day: (itinerary.stops[at] as ItineraryStop).day,
+      arriveAt: before.departAt,
+      departAt: before.departAt,
+    };
+    const stops = [...itinerary.stops.slice(0, at), stop, ...itinerary.stops.slice(at)];
+    const legs = await this.deps.router.route(stops);
+    const extraMinutes = Math.round(
+      (legs.reduce((sum, l) => sum + l.durationSeconds, 0) -
+        itinerary.legs.reduce((sum, l) => sum + l.durationSeconds, 0)) /
+        60,
+    );
+    if (extraMinutes > MAX_ADDED_DETOUR_MINUTES) {
+      throw new PlanningError(
+        `${located.name} is about ${Math.round(extraMinutes / 60)} hr of extra driving from your route.`,
+      );
+    }
+    const timed = rescheduleFrom(stops, legs, at, itinerary.timeZone);
+    return {
+      itinerary: finalizeItinerary({
+        ...itinerary,
+        version: input.version,
+        resolved: input.resolved,
+        stops: timed,
+        legs,
+        memberCount: input.memberCount,
+        vehicleMpg: this.deps.vehicleMpg,
+        gasPriceUsdPerGallon: this.deps.gasPriceUsdPerGallon,
+      }),
+      stop: timed[at] as ItineraryStop,
       summary: result.summary.trim().slice(0, 200),
     };
   }

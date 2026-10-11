@@ -4,10 +4,12 @@ import { diffItineraries, formatDiff } from "../../domain/diff";
 import { currentStopIndex, finalizeItinerary, shiftSchedule } from "../../domain/schedule";
 import { formatTime } from "../../domain/time";
 import { type Itinerary, type LiveUpdate, liveUpdateSchema, type Trip } from "../../schemas";
+import { LlmError } from "../../services/llm";
 import { PlanningError } from "../../services/planner";
 import { conversationBlock, itineraryBlock, SYSTEM } from "../../services/prompts";
 import { copy, VIBES, type Vibe } from "../copy";
 import type { Ctx, Engine } from "../engine";
+import { interpretPhoto, stopRequestFor } from "./photo";
 
 /**
  * The first itinerary is in and the trip starts: each member gets "✅ Itinerary ready!", the dashboard
@@ -113,6 +115,8 @@ export async function handle(e: Engine, ctx: Ctx): Promise<void> {
         return await delay(e, ctx, itinerary, intent, now);
       case "replace_stop":
         return await replaceStop(e, ctx, itinerary, intent);
+      case "add_stop":
+        return await addStop(e, ctx, itinerary, intent.request ?? ctx.msg.text);
       case "replan_remaining":
         return await replanRemaining(e, ctx, itinerary, intent.request ?? ctx.msg.text);
       case "none":
@@ -161,6 +165,50 @@ async function replaceStop(e: Engine, ctx: Ctx, itinerary: Itinerary, intent: Li
     version: itinerary.version + 1,
   });
   await publish(e, ctx, itinerary, next, summary || "swapped a stop.");
+}
+
+/**
+ * A photo on the road ("saw this on Instagram, let's go here"): Gemini reads what it shows, then the place
+ * itself, or a real place like it, is added to the rest of the trip for everyone.
+ */
+export async function photoStop(e: Engine, ctx: Ctx): Promise<void> {
+  const itinerary = await e.currentItinerary(ctx.trip);
+  if (!itinerary || !ctx.trip.resolved) return;
+  await e.reply(ctx, copy.photoLooking());
+  let reading: Awaited<ReturnType<typeof interpretPhoto>>;
+  try {
+    reading = await interpretPhoto(e, ctx, `${itinerary.startLocation} → ${itinerary.endLocation}`);
+  } catch (error) {
+    if (!(error instanceof LlmError)) throw error;
+    e.log("image_interpretation_failed", { error: String(error) });
+    return void (await e.reply(ctx, copy.couldNot("I couldn't read that picture right now")));
+  }
+  const request = stopRequestFor(reading.interpretation, ctx.msg.text);
+  if (!request) return void (await e.reply(ctx, copy.photoUnclear()));
+  try {
+    await addStop(e, ctx, itinerary, request, false);
+  } catch (error) {
+    if (!(error instanceof PlanningError) && !(error instanceof LlmError)) throw error;
+    await e.reply(
+      ctx,
+      copy.couldNot(error instanceof PlanningError ? error.message : "I couldn't find that place right now"),
+    );
+  }
+}
+
+/** One new stop on the rest of the trip, placed where it adds the least driving; nothing is dropped. */
+async function addStop(e: Engine, ctx: Ctx, itinerary: Itinerary, request: string, ack = true): Promise<void> {
+  if (ack) await e.reply(ctx, copy.working());
+  const { itinerary: next, stop } = await e.planner.addStop({
+    itinerary,
+    request,
+    after: currentStopIndex(itinerary, e.clock()),
+    resolved: ctx.trip.resolved as NonNullable<Trip["resolved"]>,
+    memberCount: itinerary.sustainability.memberCount,
+    version: itinerary.version + 1,
+  });
+  const when = stop.arriveAt ? `Day ${stop.day}, ~${formatTime(stop.arriveAt, itinerary.timeZone)}` : `Day ${stop.day}`;
+  await publish(e, ctx, itinerary, next, `added ${stop.name} (${when}).`);
 }
 
 async function replanRemaining(e: Engine, ctx: Ctx, itinerary: Itinerary, request: string): Promise<void> {

@@ -539,10 +539,58 @@ describe("Photos", () => {
     await say(ALEX, "add something like this");
     expect(chat.lastTextTo(ALEX)).toContain("Send the picture");
     expect((await tripOf(ALEX)).currentVersion).toBe(2);
+  });
 
+  it("on the road, a photo (or 'add a stop at …') becomes a new stop for everyone", async () => {
+    await join();
+    canonicalizePlaces();
+    for (const who of [ALEX, SAM]) {
+      await say(who, "Chapel Hill to Asheville");
+      await say(who, "oct 17-18");
+      await say(who, "$200, halal");
+    }
+    llm.on("itinerary_draft", DRAFT);
+    await say(ALEX, "nope");
+    await say(SAM, "nope"); // everyone agrees → straight to the road
     const trip = await tripOf(ALEX);
-    await repo.transition(trip.id, "review", "execution");
+    expect(trip.phase).toBe("execution");
+    const v1 = await repo.getItinerary(trip.id, 1);
+
+    // "Saw this on Instagram, let's go here": Gemini reads the photo, then finds and places the real spot.
+    llm.on("image_interpretation", FALAFEL);
+    llm.on("added_stop", {
+      stop: stop("Gypsy Queen Cuisine", "restaurant", 45),
+      summary: "Lebanese food truck for lunch",
+    });
+    await engine.receive({
+      messageId: `m${++counter}`,
+      handle: ALEX,
+      chatId: `any;-;${ALEX}`,
+      text: "saw this place on instagram, let's go here",
+      receivedAt: now,
+      image: PNG,
+    });
+    await engine.settled();
+    expect(llm.calls.find((c) => c.task === "image_interpretation")?.prompt).toContain("let's go here");
+    expect(llm.calls.find((c) => c.task === "added_stop")?.prompt).toContain("Gypsy Queen Cuisine, Asheville, NC");
+    const v2 = await repo.getItinerary(trip.id, 2);
+    expect(v2?.stops.map((s) => s.name)).toContain("Gypsy Queen Cuisine");
+    expect(v2?.stops).toHaveLength((v1?.stops.length ?? 0) + 1); // nothing dropped
+    for (const who of [ALEX, SAM]) {
+      expect(chat.textsTo(who).some((t) => /^🔄 Alex: added Gypsy Queen Cuisine \(Day \d, ~/.test(t))).toBe(true);
+      expect(chat.timeline(who).at(-1)).toBe("[card edit]");
+    }
+
+    // The same in words.
+    llm.on("live_update", { kind: "add_stop", delayMinutes: null, stopId: null, request: "a donut shop", reply: null });
+    llm.set("added_stop", { stop: stop("Hole Doughnuts", "restaurant", 20), summary: "Donuts" });
+    await say(SAM, "can we add a stop at a donut shop?");
+    expect((await repo.getItinerary(trip.id, 3))?.stops.map((s) => s.name)).toContain("Hole Doughnuts");
+    expect(chat.textsTo(ALEX).some((t) => t.startsWith("🔄 Sam: added Hole Doughnuts"))).toBe(true);
+
+    // Photos are still declined where they mean nothing (e.g. while drafting).
+    await repo.transition(trip.id, "execution", "drafting");
     await sendPhoto(ALEX);
-    expect(chat.lastTextTo(ALEX)).toContain("while we're planning or reviewing");
+    expect(chat.lastTextTo(ALEX)).toContain("can't use photos at this step");
   });
 });

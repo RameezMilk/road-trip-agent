@@ -200,6 +200,8 @@ export class Engine {
         if (open) return this.reply(ctx, copy.pollText(open, open.round > 1));
         return review.photoFeedback(this, ctx);
       }
+      case "execution":
+        return execution.photoStop(this, ctx);
       default:
         return this.reply(ctx, copy.photoNotNow());
     }

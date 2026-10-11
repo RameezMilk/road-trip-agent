@@ -12,6 +12,7 @@ export const LlmTask = z.enum([
   "replacement_stop",
   "place_canonicalization",
   "image_interpretation",
+  "added_stop",
 ]);
 export type LlmTask = z.infer<typeof LlmTask>;
 
@@ -30,6 +31,7 @@ export const DEFAULT_EFFORT: Record<LlmTask, LlmEffort> = {
   live_update: "low",
   replacement_stop: "low",
   image_interpretation: "low", // reads a photo and places it with Google Search
+  added_stop: "low",
 };
 
 export interface LlmRequest<T> {

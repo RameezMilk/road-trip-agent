@@ -120,14 +120,14 @@ export const FeedbackAssessment = z.strictObject({
 });
 export type FeedbackAssessment = z.infer<typeof FeedbackAssessment>;
 
-export const LiveUpdateKind = z.enum(["delay", "replace_stop", "replan_remaining", "none"]);
+export const LiveUpdateKind = z.enum(["delay", "replace_stop", "add_stop", "replan_remaining", "none"]);
 
 export const liveUpdateSchema = (stopIds: [string, ...string[]]) =>
   z.strictObject({
     kind: LiveUpdateKind,
     delayMinutes: z.int().nullable(),
     stopId: z.enum(stopIds).nullable(),
-    /** What the group wants instead (replace_stop / replan_remaining). */
+    /** What the group wants instead, or what to add (replace_stop / add_stop / replan_remaining). */
     request: z.string().nullable(),
     /** Reply for kind "none" (questions, chit-chat). */
     reply: z.string().nullable(),

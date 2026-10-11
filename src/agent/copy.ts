@@ -221,8 +221,7 @@ export const copy = {
   photoSeen: (description: string) => `📸 ${description}.`,
   photoUnclear: () =>
     "📸 I couldn't spot a place or a kind of stop in that picture. Send a screenshot of the post, or a photo of the kind of spot you'd like.",
-  photoNotNow: () =>
-    "📸 I can use photos while we're planning or reviewing the itinerary — for now, mind typing it out?",
+  photoNotNow: () => "📸 I can't use photos at this step — mind typing it out?",
   photoUnreadable: () => "📸 I couldn't open that picture. Mind sending it again?",
   sendThePhoto: () => "📸 Send the picture and I'll work it in.",
   reminder: (name: string | null, waiting: Array<{ name: string; waitedMs: number }>, ask: string) => {

@@ -4,8 +4,8 @@ import { copy } from "./copy";
 import type { Engine, Log } from "./engine";
 import { KeyedQueue } from "./keyed-queue";
 
-/** Phases where a photo means something (a wish while planning, feedback while reviewing). */
-const PHOTO_PHASES = new Set(["planning", "review"]);
+/** Phases where a photo means something (a wish while planning, feedback while reviewing, a new stop on the road). */
+const PHOTO_PHASES = new Set(["planning", "review", "execution"]);
 /** Inline image limit for Gemini requests, with headroom for base64 and the prompt. */
 const MAX_IMAGE_BYTES = 7 * 1024 * 1024;
 const IMAGE_READ_TIMEOUT_MS = 20_000;

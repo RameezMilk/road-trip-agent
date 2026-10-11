@@ -116,7 +116,9 @@ Never move it to serverless or edge, because the stream must stay connected.
 6. **Execution:** Gemini `LiveUpdate` classifies the message:
    - `delay` runs `shiftSchedule` for the same day;
    - `replace_stop` runs `Planner.replaceStop`;
+   - `add_stop` runs `Planner.addStop`: Gemini (with Google Search) finds the real place, OSM locates it, and it goes between the stops still ahead where it adds the least driving (straight-line cheapest insertion, then OSRM re-times everything after it). Nothing is dropped; more than 3 h of extra driving is declined;
    - `replan_remaining` re-drafts the rest.
+   - **A photo** ("saw this on Instagram, let's go here") goes through `ImageInterpretation` (caption included), then the place itself, or a real place like the view, is added with `Planner.addStop` (`execution.photoStop`).
 
    Changes apply immediately, everyone is told, and cards are edited in place.
 
@@ -182,7 +184,7 @@ Never move it to serverless or edge, because the stream must stay connected.
 | 10 | Changes are auto, proposed or voted depending on impact | During **execution** (on the road), changes apply immediately and everyone is notified. The three tiers apply during itinerary review. | Last-minute changes on the road can't wait for re-approval. |
 | 11 | Gas savings and carbon footprint | Computed in code from OSRM distance and `VEHICLE_MPG`/`GAS_PRICE_USD_PER_GALLON`, at 8.887 kg CO₂ per gallon (EPA). Carpooling savings are measured against each member driving solo. The dashboard labels all of these as assumptions. | Gemini never supplies distances, times, fuel or CO₂. |
 | 12 | (unspecified) | Each member's first name is taken from their Photon user record (`firstName`), and asked only if Photon has none | Polls, status messages and the dashboard show first names, never phone numbers. |
-| 13 | (unspecified) | Text, plus **photos during planning and review**: a screenshot of a place becomes a "visit" wish, and a photo of a view becomes a "stops similar to" wish or feedback. Voice notes and other attachments get a "text only for now" reply. | People share places as screenshots and pictures, which Gemini can read directly. Voice notes would need to be transcoded first (iMessage records them as CAF). |
+| 13 | (unspecified) | Text, plus **photos during planning, review and on the road**: a screenshot of a place becomes a "visit" wish, and a photo of a view becomes a "stops similar to" wish or feedback; on the road either one becomes a new stop. Voice notes and other attachments get a "text only for now" reply. | People share places as screenshots and pictures, which Gemini can read directly. Voice notes would need to be transcoded first (iMessage records them as CAF). |
 | 14 | (unspecified) | Planning starts once at least `MIN_MEMBERS` (default 2) people have joined | Stops a host's early `ready` from launching a solo trip. Set it to 1 for solo testing. |
 | 15 | Dashboard only after everyone approves | The card is sent to everyone on full approval, as specified, but `dashboard` also works during review as a preview | Lets the group see the map while they decide, without changing the approval flow. |
 | 16 | Requirements gathered by the "Planning Phase" | Mid-planning corrections ("actually change my budget to 300") are re-extracted and re-validated | People change their minds, and the predefined schema stays authoritative. |
